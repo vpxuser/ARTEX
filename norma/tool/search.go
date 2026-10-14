@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -79,15 +80,20 @@ func runGlob(_ context.Context, input json.RawMessage, tc *ToolContext) (Result,
 		return nil
 	})
 	sort.Slice(matches, func(i, j int) bool { return matches[i].mod > matches[j].mod })
+	artifact := newArtifact(tc, "search", root)
+	artifact.Query = in.Pattern
 	if len(matches) == 0 {
-		return Text("No files found"), nil
+		return artifactResult(Text("No files found"), artifact), nil
 	}
 	var b strings.Builder
 	for _, m := range matches {
+		artifact.addEntry(ToolArtifactEntry{Path: m.path})
 		b.WriteString(m.path)
 		b.WriteByte('\n')
 	}
-	return Text(Capture(tc, b.String())), nil
+	out := Capture(tc, b.String())
+	artifact.Truncated = artifact.Truncated || out != b.String()
+	return artifactResult(Text(out), artifact), nil
 }
 
 func matchGlob(pattern, path string) bool {
@@ -271,31 +277,58 @@ func runGrep(_ context.Context, input json.RawMessage, tc *ToolContext) (Result,
 		scan(root, filepath.Dir(root))
 	}
 	if len(results) == 0 {
-		return Text("No matches found"), nil
+		artifact := newArtifact(tc, "search", root)
+		artifact.Query = in.Pattern
+		return artifactResult(Text("No matches found"), artifact), nil
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].path < results[j].path })
 
 	// Flatten to output entries per mode, then page with offset + head_limit.
 	var lines []string
-	switch mode {
-	case "content":
-		for _, r := range results {
-			lines = append(lines, r.lines...)
-		}
-	case "count":
-		for _, r := range results {
-			lines = append(lines, fmt.Sprintf("%s: %d", r.path, r.count))
-		}
-	default: // files_with_matches
-		for _, r := range results {
-			lines = append(lines, r.path)
-		}
-	}
 	headLimit := 250
 	if in.HeadLimit != nil {
 		headLimit = *in.HeadLimit
 	}
+	artifact := newArtifact(tc, "search", root)
+	artifact.Query = in.Pattern
+	entryStart := max(0, in.Offset)
+	recordEntry := func(position int, entry ToolArtifactEntry) {
+		if position < entryStart || (headLimit > 0 && position-entryStart >= headLimit) {
+			return
+		}
+		artifact.addEntry(entry)
+	}
+	switch mode {
+	case "content":
+		for _, r := range results {
+			for i, line := range r.lineNumbers {
+				if line == 0 { // separator between non-contiguous context groups
+					continue
+				}
+				// scanFile generated this prefix from the known path and line.
+				// No delimiter guessing, even for filenames containing ':'/'-'.
+				prefix := len(r.path) + 1
+				if showLines {
+					prefix += len(strconv.Itoa(line)) + 1
+				}
+				recordEntry(len(lines)+i, ToolArtifactEntry{Path: r.fullPath, Line: line, Text: r.lines[i][prefix:]})
+			}
+			lines = append(lines, r.lines...)
+		}
+	case "count":
+		for _, r := range results {
+			count := r.count
+			recordEntry(len(lines), ToolArtifactEntry{Path: r.fullPath, Count: &count})
+			lines = append(lines, fmt.Sprintf("%s: %d", r.path, r.count))
+		}
+	default: // files_with_matches
+		for _, r := range results {
+			recordEntry(len(lines), ToolArtifactEntry{Path: r.fullPath})
+			lines = append(lines, r.path)
+		}
+	}
 	kept, more := applyHeadOffset(lines, headLimit, in.Offset)
+	artifact.Truncated = artifact.Truncated || in.Offset > 0 || more > 0
 	out := strings.Join(kept, "\n")
 	if len(kept) > 0 {
 		out += "\n"
@@ -303,7 +336,9 @@ func runGrep(_ context.Context, input json.RawMessage, tc *ToolContext) (Result,
 	if more > 0 {
 		out += fmt.Sprintf("... [%d more result(s) — page with offset=%d, or head_limit=0 for all] ...\n", more, in.Offset+len(kept))
 	}
-	return Text(Capture(tc, out)), nil
+	captured := Capture(tc, out)
+	artifact.Truncated = artifact.Truncated || captured != out
+	return artifactResult(Text(captured), artifact), nil
 }
 
 // rgFileTypes maps a ripgrep-style file type to its globs (common subset).
@@ -374,9 +409,11 @@ func applyHeadOffset(lines []string, limit, offset int) (kept []string, more int
 
 // grepHit holds one file's grep results.
 type grepHit struct {
-	path  string
-	lines []string
-	count int
+	path        string
+	fullPath    string
+	lines       []string
+	lineNumbers []int // aligned with lines; separators have line zero
+	count       int
 }
 
 func scanFile(path, base string, re *regexp.Regexp, mode string, showLines, multiline bool, before, after int) *grepHit {
@@ -427,7 +464,7 @@ func scanFile(path, base string, re *regexp.Regexp, mode string, showLines, mult
 	if len(matches) == 0 {
 		return nil
 	}
-	res := &grepHit{path: rel, count: len(matches)}
+	res := &grepHit{path: rel, fullPath: path, count: len(matches)}
 	if mode != "content" {
 		return res
 	}
@@ -461,6 +498,7 @@ func scanFile(path, base string, re *regexp.Regexp, mode string, showLines, mult
 	for _, j := range order {
 		if hasContext && prev >= 0 && j != prev+1 {
 			res.lines = append(res.lines, "--") // separate non-contiguous groups
+			res.lineNumbers = append(res.lineNumbers, 0)
 		}
 		sep := "-" // context line
 		if isMatch[j] {
@@ -471,6 +509,7 @@ func scanFile(path, base string, re *regexp.Regexp, mode string, showLines, mult
 		} else {
 			res.lines = append(res.lines, fmt.Sprintf("%s%s%s", rel, sep, lines[j]))
 		}
+		res.lineNumbers = append(res.lineNumbers, j+1)
 		prev = j
 	}
 	return res

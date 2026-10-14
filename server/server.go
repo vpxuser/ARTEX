@@ -709,6 +709,7 @@ func (s *Server) Handler() http.Handler {
 	// 工作空间文件管理器（针对 workDir）
 	mux.HandleFunc("GET /api/workspace/list", s.wsList)
 	mux.HandleFunc("GET /api/workspace/read", s.wsRead)
+	mux.HandleFunc("GET /api/workspace/preview", s.wsPreview)
 	mux.HandleFunc("POST /api/workspace/write", s.wsWrite)
 	mux.HandleFunc("POST /api/workspace/mkdir", s.wsMkdir)
 	mux.HandleFunc("DELETE /api/workspace/delete", s.wsDelete)
@@ -3082,12 +3083,12 @@ func (s *Server) activityDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seq, _ := strconv.ParseInt(r.PathValue("seq"), 10, 64)
-	d, err := taskActivityDetail(t, seq)
+	a, err := t.Store.ActivityRecordWithSources(seq)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"detail": d})
+	writeJSON(w, 200, activityDetailPayload(a))
 }
 
 // taskActivityDetail keeps the legacy local-task behavior (including thinking

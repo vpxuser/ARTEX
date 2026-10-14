@@ -6,7 +6,10 @@
 // of Events and threads context cancellation throughout.
 package harness
 
-import "github.com/Autumn-27/norma/llm"
+import (
+	"github.com/Autumn-27/norma/llm"
+	"github.com/Autumn-27/norma/tool"
+)
 
 // EventKind classifies a loop Event.
 type EventKind string
@@ -23,12 +26,13 @@ const (
 
 // Event is one item in the loop's output stream.
 type Event struct {
-	Kind       EventKind
-	Text       string            // KindText / KindThinking / KindProgress
-	ToolUse    *llm.ContentBlock // KindToolUse
-	ToolResult *llm.ContentBlock // KindToolResult
-	Terminal   *Terminal         // KindResult
-	Usage      *llm.Usage        // KindUsage: cumulative usage after the latest model turn
+	Kind         EventKind
+	Text         string             // KindText / KindThinking / KindProgress
+	ToolUse      *llm.ContentBlock  // KindToolUse
+	ToolResult   *llm.ContentBlock  // KindToolResult
+	ToolArtifact *tool.ToolArtifact // KindToolResult: host-only evidence; never part of model messages
+	Terminal     *Terminal          // KindResult
+	Usage        *llm.Usage         // KindUsage: cumulative usage after the latest model turn
 }
 
 // TerminalReason explains why the loop stopped.

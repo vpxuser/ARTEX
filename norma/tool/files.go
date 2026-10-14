@@ -55,8 +55,10 @@ func runRead(_ context.Context, input json.RawMessage, tc *ToolContext) (Result,
 	if err != nil {
 		return Errorf(fmt.Sprintf("Error reading %s: %v", in.FilePath, err)), nil
 	}
+	artifact := newArtifact(tc, "read", path)
 	if isBinary(data) {
-		return Text(fmt.Sprintf("[binary file %s not shown — %d bytes]", in.FilePath, len(data))), nil
+		artifact.UnavailableReason = "binary_or_invalid_utf8"
+		return artifactResult(Text(fmt.Sprintf("[binary file %s not shown — %d bytes]", in.FilePath, len(data))), artifact), nil
 	}
 	lines := strings.Split(string(data), "\n")
 	start := 0
@@ -74,21 +76,28 @@ func runRead(_ context.Context, input json.RawMessage, tc *ToolContext) (Result,
 	if end > len(lines) {
 		end = len(lines)
 	}
+	artifact.Truncated = start > 0 || end < len(lines)
+	if start < end {
+		artifact.LineStart, artifact.LineEnd = start+1, end
+	}
 	var b strings.Builder
 	for i := start; i < end; i++ {
 		line := lines[i]
 		if len(line) > maxLineLen {
+			artifact.Truncated = true
 			line = line[:maxLineLen] + "… [line truncated]"
 		}
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
 	}
 	if b.Len() == 0 {
 		if len(data) == 0 {
-			return Text("(file is empty)"), nil
+			return artifactResult(Text("(file is empty)"), artifact), nil
 		}
-		return Text("(no lines in the requested range)"), nil
+		return artifactResult(Text("(no lines in the requested range)"), artifact), nil
 	}
-	return Text(readCapture(tc, b.String(), start)), nil
+	out := readCapture(tc, b.String(), start)
+	artifact.Truncated = artifact.Truncated || out != b.String()
+	return artifactResult(Text(out), artifact), nil
 }
 
 // readOutputBonus lifts the Read tool's output budget above the shared default
@@ -170,12 +179,14 @@ func runWrite(_ context.Context, input json.RawMessage, tc *ToolContext) (Result
 	}
 	path := resolvePath(tc, in.FilePath)
 	existed := false
-	if info, err := os.Stat(path); err == nil {
+	info, statErr := os.Stat(path)
+	if statErr == nil {
 		if info.IsDir() {
 			return Errorf(fmt.Sprintf("Error: %s is an existing directory, not a file.", in.FilePath)), nil
 		}
 		existed = true
 	}
+	before, beforeExists, snapshotReason := readBeforeSnapshot(path, info, statErr)
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Errorf(fmt.Sprintf("Error creating directory: %v", err)), nil
@@ -185,10 +196,16 @@ func runWrite(_ context.Context, input json.RawMessage, tc *ToolContext) (Result
 		return Errorf(fmt.Sprintf("Error writing %s: %v", in.FilePath, err)), nil
 	}
 	verb := "Created"
+	operation := "create"
 	if existed {
 		verb = "Overwrote"
+		operation = "overwrite"
 	}
-	return Text(fmt.Sprintf("%s %s (%d bytes)", verb, in.FilePath, len(in.Content))), nil
+	if beforeExists == nil {
+		operation = "overwrite"
+	}
+	return artifactResult(Text(fmt.Sprintf("%s %s (%d bytes)", verb, in.FilePath, len(in.Content))),
+		changeArtifact(tc, path, operation, before, in.Content, beforeExists, snapshotReason)), nil
 }
 
 // NewEdit builds the Edit tool: exact string replacement with uniqueness check.
@@ -246,5 +263,7 @@ func runEdit(_ context.Context, input json.RawMessage, tc *ToolContext) (Result,
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		return Errorf(fmt.Sprintf("Error writing %s: %v", in.FilePath, err)), nil
 	}
-	return Text(fmt.Sprintf("Edited %s (%d replacement(s))", in.FilePath, count)), nil
+	existed := true
+	return artifactResult(Text(fmt.Sprintf("Edited %s (%d replacement(s))", in.FilePath, count)),
+		changeArtifact(tc, path, "edit", data, updated, &existed, "")), nil
 }

@@ -55,6 +55,8 @@ func (tc *ToolContext) progress(msg string) {
 type Result struct {
 	Content []llm.ContentBlock
 	IsError bool
+	// Artifact is host-only UI evidence, separate from the model's Content.
+	Artifact *ToolArtifact `json:"-"`
 	// Extra holds additional messages the tool injects into the conversation
 	// right after its tool_result (e.g. the Skill tool emits the invoked skill's
 	// instructions as an independent user message rather than burying them in the

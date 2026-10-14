@@ -354,12 +354,12 @@ func (s *Server) pgConversationMsgDetail(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 400, "bad seq")
 		return
 	}
-	detail, err := pg.ConvActivityDetail(c.ID, seq)
+	activity, err := pg.ConvActivityRecord(c.ID, seq)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"detail": detail})
+	writeJSON(w, 200, activityDetailPayload(activity))
 }
 
 // pgStopConversation aborts the in-flight run for one conversation (manual stop —

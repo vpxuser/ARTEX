@@ -272,15 +272,36 @@ func (s *ExplorationStore) ActivityListWithSources(nodeID, sinceID int64, limit 
 // intents. Source planner/main rows have no node id and must never become part of
 // inherited context.
 func (s *ExplorationStore) ActivityDetailWithSources(id int64) (string, error) {
-	detail, err := s.ActivityDetail(id)
-	if err != nil || detail != "" {
-		return detail, err
-	}
-	acts, err := s.ActivityByIDsWithSources([]int64{id})
-	if err != nil || len(acts) == 0 {
+	a, err := s.ActivityRecordWithSources(id)
+	if err != nil || a == nil {
 		return "", err
 	}
-	return acts[0].Detail, nil
+	return a.Detail, nil
+}
+
+// ActivityRecordWithSources shares the detail boundary: any local row, or a
+// terminal worker row from a direct source. Never inspect a source record by its
+// global ID before applying the terminal-intent filter.
+func (s *ExplorationStore) ActivityRecordWithSources(id int64) (*Activity, error) {
+	a, err := s.ActivityRecord(id)
+	if err != nil || a != nil {
+		return a, err
+	}
+	sources, err := s.DirectSourceStores()
+	if err != nil {
+		return nil, err
+	}
+	for _, source := range sources {
+		acts, err := source.Store.ActivityByIDsForTerminalIntents([]int64{id})
+		if err != nil {
+			return nil, err
+		}
+		if len(acts) > 0 {
+			a := markInheritedActivities(acts, source.Task.TaskID)[0]
+			return &a, nil
+		}
+	}
+	return nil, nil
 }
 
 // ActivityTraceSearchWithSources performs the scoped worker-trace search used

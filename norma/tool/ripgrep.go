@@ -1,8 +1,12 @@
 package tool
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Ripgrep integration: the Grep tool prefers the ripgrep binary when available
@@ -103,6 +108,8 @@ type ripgrepReq struct {
 // Returns ok=false when rg failed for a real reason (not "no matches"), so the
 // caller falls back to the Go implementation.
 func runWithRipgrep(rg string, r ripgrepReq, tc *ToolContext) (Result, bool) {
+	artifact := newArtifact(tc, "search", r.root)
+	artifact.Query = r.pattern
 	args := []string{"--color", "never"}
 	if r.ignoreCase {
 		args = append(args, "-i")
@@ -112,14 +119,11 @@ func runWithRipgrep(rg string, r ripgrepReq, tc *ToolContext) (Result, bool) {
 	}
 	switch r.mode {
 	case "files_with_matches":
-		args = append(args, "-l")
+		args = append(args, "-l", "--null")
 	case "count":
-		args = append(args, "-c")
+		args = append(args, "-c", "--null", "--with-filename")
 	default: // content
-		args = append(args, "--no-heading")
-		if r.showLines {
-			args = append(args, "-n")
-		}
+		args = append(args, "--json")
 		if r.before > 0 {
 			args = append(args, "-B", strconv.Itoa(r.before))
 		}
@@ -139,8 +143,10 @@ func runWithRipgrep(rg string, r ripgrepReq, tc *ToolContext) (Result, bool) {
 	}
 	// Run inside root so printed paths are root-relative (matching the Go impl).
 	dir, target := r.root, "."
+	singleFile := false
 	if st, err := os.Stat(r.root); err == nil && !st.IsDir() {
 		dir, target = filepath.Dir(r.root), filepath.Base(r.root)
+		singleFile = true
 	}
 	// `-e pattern --` keeps a pattern/path starting with '-' from being read as a flag.
 	args = append(args, "-e", r.pattern, "--", target)
@@ -151,26 +157,210 @@ func runWithRipgrep(rg string, r ripgrepReq, tc *ToolContext) (Result, bool) {
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 1 {
-			return Text("No matches found"), true // rg exit 1 = no matches
+			return artifactResult(Text("No matches found"), artifact), true // rg exit 1 = no matches
 		}
 		return Result{}, false // real failure → Go fallback
 	}
-	trimmed := strings.TrimRight(string(out), "\n")
-	if trimmed == "" {
-		return Text("No matches found"), true
+	if len(out) == 0 {
+		return artifactResult(Text("No matches found"), artifact), true
 	}
-	lines := strings.Split(trimmed, "\n")
-	headLimit := 250
+	page := newRipgrepPage(r, artifact)
+	var decodeErr error
+	switch r.mode {
+	case "files_with_matches":
+		decodeErr = readRipgrepFiles(out, dir, page)
+	case "count":
+		decodeErr = readRipgrepCounts(out, dir, singleFile, page)
+	default:
+		decodeErr = readRipgrepContent(out, dir, singleFile, r, page)
+	}
+	if decodeErr != nil {
+		// Unrecognised output from an older/wrapped rg is still useful evidence.
+		// Do not guess locations or run the search a second time to fill metadata.
+		artifact.Entries = nil
+		artifact.UnavailableReason = "unstructured_search_output"
+		raw := string(out)
+		captured := Capture(tc, raw)
+		artifact.Truncated = captured != raw
+		return artifactResult(Text(captured), artifact), true
+	}
+	return page.result(tc), true
+}
+
+// A page is built while decoding the single rg execution. Entries stay bounded
+// even when head_limit=0 asks for all model-facing result text.
+type ripgrepPage struct {
+	artifact                  *ToolArtifact
+	offset, limit, seen, more int
+	lines                     []string
+}
+
+func newRipgrepPage(r ripgrepReq, artifact *ToolArtifact) *ripgrepPage {
+	limit := 250
 	if r.headLimit != nil {
-		headLimit = *r.headLimit
+		limit = *r.headLimit
 	}
-	kept, more := applyHeadOffset(lines, headLimit, r.offset)
-	res := strings.Join(kept, "\n")
-	if len(kept) > 0 {
-		res += "\n"
+	return &ripgrepPage{artifact: artifact, offset: max(0, r.offset), limit: limit}
+}
+
+func (p *ripgrepPage) add(text string, entry *ToolArtifactEntry) {
+	position := p.seen
+	p.seen++
+	if position < p.offset {
+		return
 	}
-	if more > 0 {
-		res += fmt.Sprintf("... [%d more result(s) — page with offset=%d, or head_limit=0 for all] ...\n", more, r.offset+len(kept))
+	if p.limit > 0 && len(p.lines) >= p.limit {
+		p.more++
+		return
 	}
-	return Text(Capture(tc, res)), true
+	p.lines = append(p.lines, text)
+	if entry != nil {
+		if !utf8.ValidString(entry.Path) || !utf8.ValidString(entry.Text) || strings.IndexByte(entry.Text, 0) >= 0 {
+			p.artifact.UnavailableReason = "binary_or_invalid_utf8"
+			return
+		}
+		p.artifact.addEntry(*entry)
+	}
+}
+
+func (p *ripgrepPage) result(tc *ToolContext) Result {
+	out := strings.Join(p.lines, "\n")
+	if len(p.lines) > 0 {
+		out += "\n"
+	}
+	if p.more > 0 {
+		out += fmt.Sprintf("... [%d more result(s) — page with offset=%d, or head_limit=0 for all] ...\n", p.more, p.offset+len(p.lines))
+	}
+	captured := Capture(tc, out)
+	p.artifact.Truncated = p.artifact.Truncated || p.offset > 0 || p.more > 0 || captured != out
+	return artifactResult(Text(captured), p.artifact)
+}
+
+func readRipgrepFiles(out []byte, dir string, page *ripgrepPage) error {
+	for len(out) > 0 {
+		end := bytes.IndexByte(out, 0)
+		if end < 0 {
+			return fmt.Errorf("missing filename terminator")
+		}
+		path := string(out[:end])
+		out = out[end+1:]
+		page.add(path, &ToolArtifactEntry{Path: filepath.Join(dir, path)})
+	}
+	return nil
+}
+
+func readRipgrepCounts(out []byte, dir string, singleFile bool, page *ripgrepPage) error {
+	for len(out) > 0 {
+		end := bytes.IndexByte(out, 0)
+		if end < 0 {
+			return fmt.Errorf("missing filename terminator")
+		}
+		path := string(out[:end])
+		out = out[end+1:]
+		end = bytes.IndexByte(out, '\n')
+		if end < 0 {
+			end = len(out)
+		}
+		rawCount := string(out[:end])
+		count, err := strconv.Atoi(rawCount)
+		if err != nil {
+			return err
+		}
+		out = out[min(end+1, len(out)):]
+		text := rawCount
+		if !singleFile {
+			text = path + ":" + rawCount
+		}
+		page.add(text, &ToolArtifactEntry{Path: filepath.Join(dir, path), Count: &count})
+	}
+	return nil
+}
+
+type ripgrepJSONText struct {
+	Text  *string `json:"text"`
+	Bytes string  `json:"bytes"`
+}
+
+func (s ripgrepJSONText) value() (string, error) {
+	if s.Text != nil {
+		return *s.Text, nil
+	}
+	if s.Bytes == "" {
+		return "", fmt.Errorf("missing text payload")
+	}
+	b, err := base64.StdEncoding.DecodeString(s.Bytes)
+	return string(b), err
+}
+
+func readRipgrepContent(out []byte, dir string, singleFile bool, req ripgrepReq, page *ripgrepPage) error {
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	lastPath, lastLine := "", 0
+	printed := false
+	for {
+		var event struct {
+			Type string `json:"type"`
+			Data struct {
+				Path         ripgrepJSONText `json:"path"`
+				Lines        ripgrepJSONText `json:"lines"`
+				LineNumber   int             `json:"line_number"`
+				BinaryOffset *int            `json:"binary_offset"`
+			} `json:"data"`
+		}
+		if err := decoder.Decode(&event); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if event.Type == "end" && event.Data.BinaryOffset != nil {
+			page.artifact.UnavailableReason = "binary_or_invalid_utf8"
+			path, err := event.Data.Path.value()
+			if err != nil {
+				return err
+			}
+			text := fmt.Sprintf("binary file matches (found \"\\0\" byte around offset %d)", *event.Data.BinaryOffset)
+			if !singleFile {
+				text = path + ": " + text
+			}
+			page.add(text, &ToolArtifactEntry{Path: filepath.Join(dir, path)})
+		}
+		if event.Type != "match" && event.Type != "context" {
+			continue
+		}
+		path, err := event.Data.Path.value()
+		if err != nil {
+			return err
+		}
+		text, err := event.Data.Lines.value()
+		if err != nil {
+			return err
+		}
+		if strings.IndexByte(text, 0) >= 0 {
+			page.artifact.UnavailableReason = "binary_or_invalid_utf8"
+			continue
+		}
+		line := event.Data.LineNumber
+		if line <= 0 {
+			return fmt.Errorf("missing line number")
+		}
+		if printed && (req.before > 0 || req.after > 0) && (lastPath != path || line > lastLine+1) {
+			page.add("--", nil)
+		}
+		separator := ":"
+		if event.Type == "context" {
+			separator = "-"
+		}
+		for _, content := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+			prefix := ""
+			if !singleFile {
+				prefix = path + separator
+			}
+			if req.showLines {
+				prefix += strconv.Itoa(line) + separator
+			}
+			page.add(prefix+content, &ToolArtifactEntry{Path: filepath.Join(dir, path), Line: line, Text: content})
+			lastPath, lastLine, printed = path, line, true
+			line++
+		}
+	}
 }

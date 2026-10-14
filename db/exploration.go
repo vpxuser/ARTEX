@@ -1750,6 +1750,23 @@ func (s *ExplorationStore) ActivityDetail(id int64) (string, error) {
 	return d.String, err
 }
 
+// ActivityRecord is the local lazy-detail lookup, including legacy thinking
+// rows. Metadata follows exactly the same exploration ownership check.
+func (s *ExplorationStore) ActivityRecord(id int64) (*Activity, error) {
+	var a Activity
+	err := s.db.QueryRow(`SELECT id, node_id, COALESCE(worker,''), COALESCE(kind,''), COALESCE(tool,''),
+COALESCE(tool_use_id,''), is_error, COALESCE(summary,''), COALESCE(detail,''), metadata, created_at
+FROM activity WHERE id=$1 AND exploration_id=$2`, id, s.expID).Scan(
+		&a.ID, &a.NodeID, &a.Worker, &a.Kind, &a.Tool, &a.ToolUseID, &a.IsError, &a.Summary, &a.Detail, &a.Metadata, &a.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 // scanTrace reads the summary-only column set shared by the worker-trace tools
 // (ActivityTrace / ActivityTraceSearch). Detail is never selected here — it is
 // pulled separately, on demand, via ActivityByIDs.
@@ -1992,7 +2009,7 @@ func (s *ExplorationStore) ActivityByIDsForTerminalIntents(ids []int64) ([]Activ
 		ph[i] = fmt.Sprintf("$%d", i+2)
 		args[i+1] = id
 	}
-	rows, err := s.db.Query(`SELECT a.id, a.node_id, COALESCE(a.kind,''), COALESCE(a.tool,''), a.is_error, COALESCE(a.detail,'')
+	rows, err := s.db.Query(`SELECT a.id, a.node_id, COALESCE(a.kind,''), COALESCE(a.tool,''), a.is_error, COALESCE(a.detail,''), COALESCE(a.worker,''), a.metadata
 	FROM activity a
 	JOIN exploration_nodes n ON n.id=a.node_id AND n.exploration_id=a.exploration_id
 		WHERE a.exploration_id=$1 AND a.kind NOT IN ('thinking','usage') AND n.kind='intent'
@@ -2005,7 +2022,7 @@ func (s *ExplorationStore) ActivityByIDsForTerminalIntents(ids []int64) ([]Activ
 	out := []Activity{}
 	for rows.Next() {
 		var a Activity
-		if err := rows.Scan(&a.ID, &a.NodeID, &a.Kind, &a.Tool, &a.IsError, &a.Detail); err != nil {
+		if err := rows.Scan(&a.ID, &a.NodeID, &a.Kind, &a.Tool, &a.IsError, &a.Detail, &a.Worker, &a.Metadata); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

@@ -30,12 +30,13 @@ const (
 )
 
 type tracked struct {
-	block  llm.ContentBlock
-	safe   bool
-	status toolStatus
-	result llm.ContentBlock
-	extra  []llm.Message // messages the tool injects after its result (Result.Extra)
-	prog   []string
+	block    llm.ContentBlock
+	safe     bool
+	status   toolStatus
+	result   llm.ContentBlock
+	artifact *tool.ToolArtifact
+	extra    []llm.Message // messages the tool injects after its result (Result.Extra)
+	prog     []string
 }
 
 func newStreamExec(l *loop) *streamExec {
@@ -96,7 +97,7 @@ func (e *streamExec) processQueue() {
 func (e *streamExec) run(t *tracked) {
 	e.l.sem <- struct{}{} // bound concurrent tool execution
 	defer func() { <-e.l.sem }()
-	res, extra := e.l.execOne(t.block, func(p tool.ProgressInfo) {
+	res, extra, artifact := e.l.execOne(t.block, func(p tool.ProgressInfo) {
 		e.mu.Lock()
 		t.prog = append(t.prog, p.Message)
 		e.mu.Unlock()
@@ -105,6 +106,7 @@ func (e *streamExec) run(t *tracked) {
 	e.mu.Lock()
 	t.result = res
 	t.extra = extra
+	t.artifact = artifact
 	t.status = stCompleted
 	e.mu.Unlock()
 	e.ping()
@@ -127,7 +129,7 @@ func (e *streamExec) drain() bool {
 		if t.status == stCompleted {
 			t.status = stYielded
 			r := t.result
-			evs = append(evs, Event{Kind: KindToolResult, ToolResult: &r})
+			evs = append(evs, Event{Kind: KindToolResult, ToolResult: &r, ToolArtifact: t.artifact})
 			continue
 		}
 		// status is queued/executing: a non-safe one preserves FIFO ordering.
@@ -195,7 +197,7 @@ func (e *streamExec) drainSynthetic(msg string) bool {
 		if t.status == stCompleted {
 			t.status = stYielded
 			r := t.result
-			evs = append(evs, Event{Kind: KindToolResult, ToolResult: &r})
+			evs = append(evs, Event{Kind: KindToolResult, ToolResult: &r, ToolArtifact: t.artifact})
 			continue
 		}
 		t.status = stYielded

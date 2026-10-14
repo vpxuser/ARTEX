@@ -25,10 +25,10 @@ func acceptsRawInput(t tool.CoreTool) bool {
 // failures become error results. It is safe to call from the streaming
 // executor's goroutines (read-only access to loop config; permission/hook
 // callbacks are the host's responsibility to make safe).
-func (l *loop) execOne(use llm.ContentBlock, emitProgress func(tool.ProgressInfo)) (llm.ContentBlock, []llm.Message) {
+func (l *loop) execOne(use llm.ContentBlock, emitProgress func(tool.ProgressInfo)) (llm.ContentBlock, []llm.Message, *tool.ToolArtifact) {
 	t, ok := l.in.Tools.Get(use.Name)
 	if !ok {
-		return llm.ToolResultText(use.ID, fmt.Sprintf("Error: unknown tool %q", use.Name), true), nil
+		return llm.ToolResultText(use.ID, fmt.Sprintf("Error: unknown tool %q", use.Name), true), nil, nil
 	}
 	input := use.Input
 
@@ -40,7 +40,7 @@ func (l *loop) execOne(use llm.ContentBlock, emitProgress func(tool.ProgressInfo
 	// still advertised to the model either way — see tool.Spec.RawInput.
 	if !acceptsRawInput(t) {
 		if err := tool.ValidateInput(t.InputSchema(), input); err != nil {
-			return llm.ToolResultText(use.ID, "Error: invalid tool input: "+err.Error(), true), nil
+			return llm.ToolResultText(use.ID, "Error: invalid tool input: "+err.Error(), true), nil, nil
 		}
 	}
 
@@ -67,7 +67,7 @@ func (l *loop) execOne(use llm.ContentBlock, emitProgress func(tool.ProgressInfo
 		if msg == "" {
 			msg = "denied"
 		}
-		return llm.ToolResultText(use.ID, "Tool call was not permitted: "+msg, true), nil
+		return llm.ToolResultText(use.ID, "Tool call was not permitted: "+msg, true), nil, nil
 	}
 	if len(dec.UpdatedInput) > 0 {
 		input = dec.UpdatedInput
@@ -76,7 +76,7 @@ func (l *loop) execOne(use llm.ContentBlock, emitProgress func(tool.ProgressInfo
 	// Pre-tool hook.
 	if l.in.Hooks != nil {
 		if block, msg, updated := l.in.Hooks.PreToolUse(l.ctx, use.Name, input); block {
-			return llm.ToolResultText(use.ID, "Blocked by hook: "+msg, true), nil
+			return llm.ToolResultText(use.ID, "Blocked by hook: "+msg, true), nil, nil
 		} else if len(updated) > 0 {
 			input = updated
 		}
@@ -116,7 +116,11 @@ func (l *loop) execOne(use llm.ContentBlock, emitProgress func(tool.ProgressInfo
 	if len(content) == 0 {
 		content = []llm.ContentBlock{llm.TextBlock("(no output)")}
 	}
-	return llm.ContentBlock{Type: llm.BlockToolResult, ToolUseID: use.ID, Content: content, IsError: res.IsError}, res.Extra
+	// Failed/denied calls cannot claim a successfully applied file change.
+	if res.IsError {
+		res.Artifact = nil
+	}
+	return llm.ContentBlock{Type: llm.BlockToolResult, ToolUseID: use.ID, Content: content, IsError: res.IsError}, res.Extra, res.Artifact
 }
 
 // capOutput runs every text block of a tool result through the idempotent
@@ -127,6 +131,9 @@ func capOutput(tc *tool.ToolContext, res tool.Result) tool.Result {
 	for i, b := range res.Content {
 		if b.Type == llm.BlockText {
 			res.Content[i].Text = tool.CaptureOnce(tc, b.Text)
+			if res.Artifact != nil && res.Artifact.Kind != "change" && res.Content[i].Text != b.Text {
+				res.Artifact.Truncated = true
+			}
 		}
 	}
 	return res

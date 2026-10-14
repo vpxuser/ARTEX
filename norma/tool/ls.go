@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -46,8 +47,9 @@ func runLS(_ context.Context, input json.RawMessage, tc *ToolContext) (Result, e
 	if err != nil {
 		return Errorf(fmt.Sprintf("Error listing %s: %v", in.Path, err)), nil
 	}
+	artifact := newArtifact(tc, "directory", dir)
 	if len(entries) == 0 {
-		return Text("(empty directory)"), nil
+		return artifactResult(Text("(empty directory)"), artifact), nil
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].IsDir() != entries[j].IsDir() {
@@ -57,6 +59,7 @@ func runLS(_ context.Context, input json.RawMessage, tc *ToolContext) (Result, e
 	})
 	var b strings.Builder
 	for _, e := range entries {
+		artifact.addEntry(ToolArtifactEntry{Path: filepath.Join(dir, e.Name())})
 		if e.IsDir() {
 			fmt.Fprintf(&b, "%s/\n", e.Name())
 			continue
@@ -67,5 +70,7 @@ func runLS(_ context.Context, input json.RawMessage, tc *ToolContext) (Result, e
 		}
 		fmt.Fprintf(&b, "%s\t%d bytes\n", e.Name(), size)
 	}
-	return Text(Capture(tc, b.String())), nil
+	out := Capture(tc, b.String())
+	artifact.Truncated = artifact.Truncated || out != b.String()
+	return artifactResult(Text(out), artifact), nil
 }

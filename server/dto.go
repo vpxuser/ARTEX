@@ -508,7 +508,7 @@ func activityDTO(a db.Activity) ActivityDTO {
 		IsError:          a.IsError,
 		Summary:          a.Summary,
 		Detail:           a.Detail, // list endpoint leaves this empty (lazy)
-		Metadata:         a.Metadata,
+		Metadata:         activityMetadataSummary(a.Metadata),
 		InputTokens:      a.InputTokens,
 		OutputTokens:     a.OutputTokens,
 		CacheReadTokens:  a.CacheReadTokens,

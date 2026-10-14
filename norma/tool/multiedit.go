@@ -83,5 +83,7 @@ func runMultiEdit(_ context.Context, input json.RawMessage, tc *ToolContext) (Re
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return Errorf(fmt.Sprintf("Error writing %s: %v", in.FilePath, err)), nil
 	}
-	return Text(fmt.Sprintf("Applied %d edits to %s (%d replacement(s))", len(in.Edits), in.FilePath, total)), nil
+	existed := true
+	return artifactResult(Text(fmt.Sprintf("Applied %d edits to %s (%d replacement(s))", len(in.Edits), in.FilePath, total)),
+		changeArtifact(tc, path, "edit", data, content, &existed, "")), nil
 }

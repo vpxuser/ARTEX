@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,7 +20,7 @@ import (
 // thinking / result). It is shared by every LLM agent in the system (worker,
 // planner, …) so their execution is visible instead of a black box — the old
 // agentcore.Run discarded every event. The emitted records carry only
-// Kind/Tool/ToolUseID/IsError/Summary/Detail; the caller's emit fills in
+// Kind/Tool/ToolUseID/IsError/Summary/Detail/Metadata; the caller's emit fills in
 // IntentID/Worker. Returns the final assistant text + terminal error.
 //
 // KindText/KindThinking arrive as streaming deltas (one event per fragment); a
@@ -108,8 +109,14 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 			out := blocksText(ev.ToolResult.Content)
 			lastTool.done(ev.ToolResult.ToolUseID)
 			auditTrace.Complete(ev.ToolResult.ToolUseID, out, ev.ToolResult.IsError)
-			rec(db.Activity{Kind: "tool_result", Tool: toolNames[ev.ToolResult.ToolUseID], ToolUseID: ev.ToolResult.ToolUseID,
-				IsError: ev.ToolResult.IsError, Summary: firstLine(out, 200), Detail: out})
+			activity := db.Activity{Kind: "tool_result", Tool: toolNames[ev.ToolResult.ToolUseID], ToolUseID: ev.ToolResult.ToolUseID,
+				IsError: ev.ToolResult.IsError, Summary: firstLine(out, 200), Detail: out}
+			if ev.ToolArtifact != nil && !ev.ToolResult.IsError {
+				// Keep file snapshots out of Detail/auditTrace/model messages. The
+				// metadata accompanies the host event solely for activity viewers.
+				activity.Metadata, _ = json.Marshal(map[string]any{"tool_artifact": ev.ToolArtifact})
+			}
+			rec(activity)
 		case harness.KindText:
 			addDelta("text", ev.Text)
 		case harness.KindThinking:
