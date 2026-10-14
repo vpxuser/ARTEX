@@ -9,6 +9,7 @@ import { mockHandle } from "@/lib/mock/handler";
 import type {
   ActiveFindingRetest,
   Activity,
+  ActivityDetail,
   Agent,
   AgentDetail,
   AgentTrigger,
@@ -434,6 +435,13 @@ export const api = {
   // ---- workspace file manager (workDir) ----
   workspaceList: (path = "") => get<WorkspaceListing>(`/workspace/list?path=${encodeURIComponent(path)}`),
   workspaceRead: (path: string) => get<WorkspaceFile>(`/workspace/read?path=${encodeURIComponent(path)}`),
+  workspacePreview: (scope: { path?: string; task?: string; conversation?: number; intent?: string; activity_seq?: number }) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(scope)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    return get<WorkspaceFile>(`/workspace/preview?${query.toString()}`);
+  },
   workspaceWrite: (path: string, content: string) =>
     post<{ ok: boolean; path: string }>(`/workspace/write`, { path, content }),
   workspaceMkdir: (path: string) => post<{ ok: boolean; path: string }>(`/workspace/mkdir`, { path }),
@@ -730,6 +738,7 @@ export const api = {
     }));
   },
   activityDetail: (id: number, task?: string) => get<{ detail: string }>(`/exploration/activity/${id}${tq(task)}`),
+  activityRecordDetail: (id: number, task?: string) => get<ActivityDetail>(`/exploration/activity/${id}${tq(task)}`),
   // Reverse-paginated session history. session = "main" | "plan" | "intent:<id>".
   // before=0 → latest page; before=<id> → the older page ending before that id.
   // snapshotCursor is the TASK-level max id at query time — open the task SSE at
@@ -1032,6 +1041,8 @@ export const api = {
   },
   conversationMsgDetail: (id: number, seq: number) =>
     get<{ detail: string }>(`/conversations/${id}/messages/${seq}`).then((r) => r.detail ?? ""),
+  conversationMsgRecordDetail: (id: number, seq: number) =>
+    get<ActivityDetail>(`/conversations/${id}/messages/${seq}`),
   sendConversationMessage: (id: number, message: string, attachments?: ChatAttachment[]) =>
     post<{ status: string }>(`/conversations/${id}/messages`, { message, attachments }),
   stopConversation: (id: number) => post<{ status: string }>(`/conversations/${id}/stop`, {}),

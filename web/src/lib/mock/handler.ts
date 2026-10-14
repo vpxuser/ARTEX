@@ -205,6 +205,26 @@ const mockIntents = structuredClone(D.intents);
 const mockCompanies = structuredClone(D.companies);
 const mockAssets = structuredClone(D.assets);
 const mockActivity = structuredClone(D.activity);
+// The same local-file fixtures exercise task and Worker transcripts.
+for (const [index, owner] of [{ worker: "mainagent" }, { worker: "work#1", intent_id: "i1" }].entries()) {
+  const workingDir = `/preview/tasks/t-acme-web${owner.intent_id ? `/i${owner.intent_id}` : ""}`;
+  mockActivity.push(...structuredClone(D.conversationMessages[4]).map((record) => {
+    const artifact = record.metadata?.tool_artifact;
+    if (artifact) {
+      const priorDir = artifact.working_dir;
+      artifact.working_dir = workingDir;
+      artifact.path = artifact.path.replace(priorDir, workingDir);
+      artifact.entries?.forEach((entry) => { entry.path = entry.path.replace(priorDir, workingDir); });
+    }
+    return { ...record, ...owner, seq: 9000 + index * 100 + record.seq, tool_use_id: record.tool_use_id ? `${index}-${record.tool_use_id}` : undefined };
+  }));
+}
+function activitySummary(record: Activity): Activity {
+  const artifact = record.metadata?.tool_artifact;
+  if (!artifact) return record;
+  const { before: _before, after: _after, entries: _entries, ...summary } = artifact;
+  return { ...record, metadata: { ...record.metadata, tool_artifact: summary } };
+}
 type MockTaskArchiveSnapshot = {
   task: Task;
   numericTaskID: number;
@@ -1612,6 +1632,16 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
 
   // ── 工作空间文件管理器（demo：静态示例树；写/建/删走下方写兜底 {ok:true}）──
   if (path === "/workspace/list") return D.workspaceList(q.get("path") ?? "");
+  if (path === "/workspace/preview") {
+    const records = q.has("conversation") ? D.conversationMessages[Number(q.get("conversation"))] ?? [] : mockActivity;
+    const record = records.find((item) => item.seq === Number(q.get("activity_seq")));
+    const artifact = record?.metadata?.tool_artifact;
+    const requested = q.get("path") || artifact?.path || "";
+    const relative = artifact ? requested.replace(`${artifact.working_dir}/`, "") : requested;
+    const content = D.toolPreviewFiles[relative];
+    if (content === undefined) throw new Error("文件不存在或当前记录没有可预览文件");
+    return { path: relative, size: new TextEncoder().encode(content).length, binary: false, content };
+  }
   if (path === "/workspace/read") return D.workspaceRead(q.get("path") ?? "");
 
   // ── stats ──
@@ -2198,15 +2228,48 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     }
     return { items, total: matched.length, page, size, edges, refs, assets };
   }
+  if (path === "/exploration/main-sessions") {
+    const first = mockActivity
+      .filter((item) => item.worker === "mainagent")
+      .sort((a, b) => a.ts.localeCompare(b.ts))[0];
+    return { sessions: [{ seq: 0, created_at: first?.ts ?? "" }], current: 0 };
+  }
+  // Match history before the per-sequence detail route, which also has three segments.
+  if (path === "/exploration/activity/history") {
+    const session = q.get("session") ?? "main:0";
+    const before = Number(q.get("before") ?? 0);
+    const limit = Math.max(1, Math.min(200, Number(q.get("limit") ?? 200)));
+    const history = mockActivity
+      .filter((item) => {
+        if (session === "plan") return item.worker === "planner";
+        if (session === "main" || session.startsWith("main:")) {
+          const segment = session === "main" ? 0 : Number(session.slice(5));
+          return item.worker === "mainagent" && (item.main_seg ?? 0) === segment;
+        }
+        return session.startsWith("intent:") && item.intent_id === session.slice(7);
+      })
+      .filter((item) => before <= 0 || item.seq < before)
+      .sort((a, b) => a.seq - b.seq);
+    const items = history.slice(-limit);
+    return {
+      items: items.map(activitySummary),
+      snapshot_cursor: Math.max(0, ...mockActivity.map((item) => item.seq)),
+      earliest_cursor: items[0]?.seq ?? 0,
+      has_more: history.length > items.length,
+    };
+  }
   if (path === "/exploration/activity" && seg.length === 2) {
     const since = Number(q.get("since") ?? 0);
     const limit = Math.max(1, Number(q.get("limit") ?? 300));
-    const items = mockActivity.filter((item) => item.seq > since).slice(0, limit);
-    return { items, cursor: items.length ? items[items.length - 1].seq : since };
+    const items = mockActivity
+      .filter((item) => item.seq > since)
+      .sort((a, b) => a.seq - b.seq)
+      .slice(0, limit);
+    return { items: items.map(activitySummary), cursor: items.length ? items[items.length - 1].seq : since };
   }
   if (seg[0] === "exploration" && seg[1] === "activity" && seg.length === 3) {
     const a = mockActivity.find((x) => x.seq === Number(seg[2]));
-    return { detail: a?.detail ?? a?.summary ?? "" };
+    return { detail: a?.detail ?? a?.summary ?? "", metadata: a?.metadata };
   }
   if (path === "/tokens/daily") return D.dailyTokens;
   if (path === "/tokens/conversations") return D.convTokens;
@@ -2349,16 +2412,27 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     return { items };
   }
   if (seg[0] === "conversations" && seg[2] === "messages" && seg.length === 3 && m === "GET") {
-    const items = mockRetestMessages[Number(seg[1])] ?? D.conversationMessages[Number(seg[1])] ?? [];
+    const messages = [...(mockRetestMessages[Number(seg[1])] ?? D.conversationMessages[Number(seg[1])] ?? [])].sort(
+      (a, b) => a.seq - b.seq,
+    );
+    const cursor = messages[messages.length - 1]?.seq ?? 0;
     const running = mockRetests.some(
       (item) => item.conversation_id === Number(seg[1]) && ["pending", "running"].includes(item.status),
     );
-    return { items, cursor: items.length ? items[items.length - 1].seq : 0, running };
+    if (q.has("since")) {
+      const since = Number(q.get("since") ?? 0);
+      return { items: messages.filter((item) => item.seq > since).map(activitySummary), cursor, running };
+    }
+    const before = Number(q.get("before") ?? 0);
+    const limit = Math.max(1, Math.min(200, Number(q.get("limit") ?? 200)));
+    const history = messages.filter((item) => before <= 0 || item.seq < before);
+    const items = history.slice(-limit);
+    return { items: items.map(activitySummary), cursor, running, hasMore: history.length > items.length };
   }
   if (seg[0] === "conversations" && seg[2] === "messages" && seg.length === 4) {
     const msgs = mockRetestMessages[Number(seg[1])] ?? D.conversationMessages[Number(seg[1])] ?? [];
     const a = msgs.find((x) => x.seq === Number(seg[3]));
-    return { detail: a?.detail ?? a?.summary ?? "" };
+    return { detail: a?.detail ?? a?.summary ?? "", metadata: a?.metadata };
   }
   if (seg[0] === "conversations" && seg[2] === "messages" && m === "POST") return { status: "ok" };
   if (seg[0] === "conversations" && seg[2] === "stop") {

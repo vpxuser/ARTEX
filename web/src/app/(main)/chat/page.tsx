@@ -7,8 +7,10 @@ import {
   Bot,
   ChevronDownIcon,
   ChevronRightIcon,
+  InfoIcon,
   ListChecksIcon,
   Loader2Icon,
+  MessageSquareIcon,
   MoreHorizontalIcon,
   PaperclipIcon,
   PencilIcon,
@@ -22,10 +24,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
+import { ConversationComposer, ConversationComposerToolbar } from "@/components/conversation-composer";
+import { ConversationWorkspace, conversationReadingClassName } from "@/components/conversation-workspace";
+import { ConversationScrollButton } from "@/components/conversation-scroll-button";
 import { MentionTextarea } from "@/components/mention-textarea";
+import { ToolInspectorProvider } from "@/components/tool-inspector";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
-import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
 import { Transcript } from "@/components/transcript";
 import {
   AlertDialog,
@@ -52,6 +58,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { useConversationScroll } from "@/hooks/use-conversation-scroll";
+import { useSessionDrafts } from "@/hooks/use-session-drafts";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
@@ -131,13 +139,15 @@ function groupByAgent(conversations: Conversation[], agentByKey: Map<string, Age
   return [...groups.values()];
 }
 
-// LiveBadge is the small pulsing "实时" chip reused from the task's main-agent
-// console — shown while a turn is streaming.
+// LiveBadge names the current run rather than the transport connection.
 function LiveBadge() {
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+    <span
+      role="status"
+      className="inline-flex shrink-0 items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 font-medium text-blue-600 text-xs dark:text-blue-400"
+    >
       <span className="size-1 animate-pulse rounded-full bg-blue-500" />
-      实时
+      运行中
     </span>
   );
 }
@@ -159,6 +169,8 @@ function Composer({
   onRemoveAttachment,
   uploading,
   allowBtw,
+  recipient,
+  footerSlot,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -175,6 +187,8 @@ function Composer({
   onRemoveAttachment?: (path: string) => void;
   uploading?: boolean;
   allowBtw?: boolean;
+  recipient?: string;
+  footerSlot?: React.ReactNode;
 }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const atts = attachments ?? [];
@@ -186,23 +200,24 @@ function Composer({
     onSend();
   }
   return (
-    <div className="border-t p-3">
+    <ConversationComposer>
       {atts.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
           {atts.map((a) => (
             <div
               key={a.path}
-              className="flex items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-xs"
+              className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-xs"
               title={a.path}
             >
               <PaperclipIcon className="size-3 shrink-0 text-primary" />
               <span className="max-w-[160px] truncate">{a.name}</span>
-              <span className="text-muted-foreground">{fmtBytes(a.size)}</span>
+              <span className="shrink-0 text-muted-foreground">{fmtBytes(a.size)}</span>
               {onRemoveAttachment && (
                 <button
                   type="button"
                   className="ml-0.5 text-muted-foreground hover:text-foreground"
                   onClick={() => onRemoveAttachment(a.path)}
+                  aria-label={`移除附件 ${a.name}`}
                   title="移除"
                 >
                   <XIcon className="size-3" />
@@ -212,8 +227,17 @@ function Composer({
           ))}
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-2">
-        {leftSlot ? <div className="w-full sm:w-auto">{leftSlot}</div> : null}
+      <MentionTextarea
+        className="max-h-40 min-h-16 w-full resize-none border-0 bg-transparent px-1 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
+        rows={2}
+        aria-label="消息内容"
+        placeholder={placeholder}
+        value={value}
+        disabled={disabled && !(running && allowBtw)}
+        onValueChange={onChange}
+        onKeyDown={onKeyDown}
+      />
+      <ConversationComposerToolbar>
         {onPickFiles && (
           <>
             <input
@@ -230,39 +254,52 @@ function Composer({
               }}
             />
             <Button
-              size="icon"
+              size="icon-sm"
+              className="rounded-full"
               variant="ghost"
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || uploading}
+              aria-label="上传文件"
               title="上传文件"
             >
               {uploading ? <Loader2Icon className="size-4 animate-spin" /> : <PaperclipIcon className="size-4" />}
             </Button>
           </>
         )}
-        <MentionTextarea
-          className="max-h-40 min-h-10 min-w-0 flex-1 resize-none"
-          rows={1}
-          placeholder={placeholder}
-          value={value}
-          disabled={disabled && !(running && allowBtw)}
-          onValueChange={onChange}
-          onKeyDown={onKeyDown}
-        />
+        <div className="min-w-0 flex-1">
+          {leftSlot}
+          {recipient && <p className="truncate text-xs text-muted-foreground">发送给 {recipient}</p>}
+          {footerSlot}
+        </div>
         {running && allowBtw && isBtwCommand(value) && (
-          <Button size="icon" onClick={onSend} aria-label="发送旁路问题" title="发送旁路问题">
+          <Button
+            size="icon-sm"
+            className="rounded-full"
+            onClick={onSend}
+            aria-label="发送旁路问题"
+            title="发送旁路问题"
+          >
             <ArrowUpIcon />
           </Button>
         )}
         {running ? (
           // while a run is in flight the send button becomes a stop button —
           // aborts just this session (the trigger queue keeps going).
-          <Button size="icon" variant="destructive" onClick={onStop} disabled={stopDisabled} title="停止本次运行">
+          <Button
+            size="icon-sm"
+            className="rounded-full"
+            variant="secondary"
+            onClick={onStop}
+            disabled={stopDisabled}
+            aria-label="停止本次运行"
+            title="停止本次运行"
+          >
             <Square className="size-3.5 fill-current" />
           </Button>
         ) : (
           <Button
-            size="icon"
+            size="icon-sm"
+            className="rounded-full"
             onClick={onSend}
             disabled={disabled || (!value.trim() && atts.length === 0)}
             title="发送消息"
@@ -271,12 +308,12 @@ function Composer({
             <ArrowUpIcon />
           </Button>
         )}
-      </div>
-    </div>
+      </ConversationComposerToolbar>
+    </ConversationComposer>
   );
 }
 
-// LLMProfileRow shows the active LLM config below the composer and lets the user
+// LLMProfileRow shows the active LLM config inside the composer and lets the user
 // switch it via a Popover. `selected` is the profile id or null for default.
 function LLMProfileRow({
   profiles,
@@ -297,24 +334,23 @@ function LLMProfileRow({
   const label = current ? current.name : `默认${activeDefault ? `（${activeDefault.name}）` : ""}`;
 
   return (
-    <div className="flex min-w-0 shrink-0 items-center gap-1 px-1 pt-0.5 pb-1">
-      <ZapIcon className="text-muted-foreground/50 size-3 shrink-0" />
-      <span className="truncate text-muted-foreground/70 text-xs" title={label}>
-        {label}
-      </span>
+    <div className="flex min-w-0 items-center gap-1">
       <Popover open={open} onOpenChange={disabled ? undefined : setOpen}>
         <PopoverTrigger asChild>
           <button
             type="button"
             disabled={disabled}
-            className="flex shrink-0 items-center gap-0.5 text-primary text-xs hover:underline disabled:pointer-events-none disabled:opacity-40"
+            className="flex min-w-0 items-center gap-1 rounded-md px-1 py-1 text-muted-foreground text-xs hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
+            aria-label={`更换 LLM 配置，当前：${label}`}
+            title={label}
           >
-            更换
-            <ChevronDownIcon className="size-3" />
+            <ZapIcon className="size-3 shrink-0" />
+            <span className="truncate">{label}</span>
+            <ChevronDownIcon className="size-3 shrink-0" />
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-64 p-1">
-          <p className="text-muted-foreground px-2 py-1 text-[11px] font-medium">选择 LLM 配置</p>
+          <p className="text-muted-foreground px-2 py-1 text-xs font-medium">选择 LLM 配置</p>
           {/* default option */}
           <button
             type="button"
@@ -323,13 +359,18 @@ function LLMProfileRow({
               setOpen(false);
             }}
             className={cn(
-              "flex w-full flex-col rounded px-2 py-1.5 text-left hover:bg-accent",
-              selected == null && "bg-accent",
+              "group/model flex w-full flex-col rounded px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              selected == null && "bg-accent text-accent-foreground",
             )}
           >
             <span className="text-sm">默认{activeDefault ? `（${activeDefault.name}）` : ""}</span>
             {activeDefault && (
-              <span className="text-muted-foreground text-[11px]">
+              <span
+                className={cn(
+                  "text-xs group-hover/model:text-accent-foreground",
+                  selected == null ? "text-accent-foreground" : "text-muted-foreground",
+                )}
+              >
                 {activeDefault.format} · {activeDefault.model}
               </span>
             )}
@@ -343,12 +384,17 @@ function LLMProfileRow({
                 setOpen(false);
               }}
               className={cn(
-                "flex w-full flex-col rounded px-2 py-1.5 text-left hover:bg-accent",
-                selected === Number(p.id) && "bg-accent",
+                "group/model flex w-full flex-col rounded px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                selected === Number(p.id) && "bg-accent text-accent-foreground",
               )}
             >
               <span className="text-sm">{p.name}</span>
-              <span className="text-muted-foreground text-[11px]">
+              <span
+                className={cn(
+                  "text-xs group-hover/model:text-accent-foreground",
+                  selected === Number(p.id) ? "text-accent-foreground" : "text-muted-foreground",
+                )}
+              >
                 {p.format} · {p.model}
               </span>
             </button>
@@ -420,7 +466,11 @@ function DraftChat({
 
   const agentPicker = (
     <Select value={agentKey} onValueChange={setAgentKey}>
-      <SelectTrigger className="w-full sm:w-40">
+      <SelectTrigger
+        size="sm"
+        className="h-6 w-fit max-w-full gap-1 border-0 bg-transparent px-1 shadow-none dark:bg-transparent"
+        aria-label="选择对话 Agent"
+      >
         <SelectValue placeholder="选择 Agent…" />
       </SelectTrigger>
       <SelectContent>
@@ -445,13 +495,19 @@ function DraftChat({
 
   return (
     <>
+      <div className="shrink-0 border-b px-4 py-3">
+        <h1 className="text-sm font-semibold">新对话</h1>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">{agent?.name ?? "选择 Agent"}</p>
+      </div>
       {/* empty / landing state fills the panel */}
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
         <div className="bg-primary/10 flex size-12 items-center justify-center rounded-full">
           <Bot className="text-primary size-6" />
         </div>
-        <div className="text-sm font-medium">开始和「{agent?.name ?? "Agent"}」对话</div>
-        {agent?.description && <p className="text-muted-foreground max-w-md text-xs">{agent.description}</p>}
+        <div className="text-base font-medium">开始和「{agent?.name ?? "Agent"}」对话</div>
+        {agent?.description && (
+          <p className="text-muted-foreground max-w-sm text-sm leading-relaxed">{agent.description}</p>
+        )}
       </div>
 
       <Composer
@@ -459,16 +515,18 @@ function DraftChat({
         onChange={setInput}
         onSend={send}
         disabled={sending || uploading || !agentKey}
-        placeholder="输入消息，@ 引用记录，Enter 发送"
+        placeholder="描述你想完成的事情，@ 引用已有记录…"
         leftSlot={agentPicker}
         onPickFiles={pickFiles}
         uploading={uploading}
-      />
-      <LLMProfileRow
-        profiles={profiles}
-        selected={llmProfileId}
-        onChange={setLlmProfileId}
-        disabled={sending || uploading}
+        footerSlot={
+          <LLMProfileRow
+            profiles={profiles}
+            selected={llmProfileId}
+            onChange={setLlmProfileId}
+            disabled={sending || uploading}
+          />
+        }
       />
     </>
   );
@@ -481,33 +539,44 @@ function ChatView({
   conv,
   agents,
   profiles,
-  initial,
+  drafts,
   onTitleMaybeChanged,
   onConvUpdated,
 }: {
   conv: Conversation;
   agents: Agent[];
   profiles: LLMProfile[];
-  // pending text + already-uploaded attachments handed off from a draft that
-  // created this conversation via the paperclip (consumed once, on mount).
-  initial?: { input?: string; attachments?: ChatAttachment[] };
+  drafts: ReturnType<typeof useSessionDrafts>;
   onTitleMaybeChanged: () => void;
   onConvUpdated: () => void;
 }) {
   const approvalFocus = useApprovalFocus({ conversationId: conv.id });
   const [messages, setMessages] = React.useState<Activity[]>([]);
   const [running, setRunning] = React.useState(false);
-  const [input, setInput] = React.useState(initial?.input ?? "");
-  const [sending, setSending] = React.useState(false);
+  const draftKey = `conversation:${conv.id}`;
+  const draft = drafts.getDraft(draftKey);
+  const input = draft.text;
+  const setInput = (text: string) => drafts.updateDraft(draftKey, { text });
+  const sending = !!draft.sending;
+  const setSending = (value: boolean) => drafts.updateDraft(draftKey, { sending: value });
   const [stopping, setStopping] = React.useState(false);
   // 方式1 文件上传:已上传的附件(落到 sessions/conv-<id>/uploads/),随下条消息一起发。
-  const [attachments, setAttachments] = React.useState<ChatAttachment[]>(initial?.attachments ?? []);
-  const [uploading, setUploading] = React.useState(false);
+  const attachments = draft.attachments;
+  const setAttachments = (update: React.SetStateAction<ChatAttachment[]>) => {
+    drafts.updateDraft(draftKey, (current) => ({
+      attachments: typeof update === "function" ? update(current.attachments) : update,
+    }));
+  };
+  const uploading = !!draft.uploading;
+  const setUploading = (value: boolean) => drafts.updateDraft(draftKey, { uploading: value });
   const cursorRef = React.useRef(0); // newest loaded id — incremental-tail anchor
   const earliestRef = React.useRef(0); // earliest loaded id — reverse-pagination anchor
   const hasMoreRef = React.useRef(false); // older history remains above the loaded window
   const loadingMoreRef = React.useRef(false); // guard: one scroll-up load at a time
   const [historyLoaded, setHistoryLoaded] = React.useState(false);
+  const [historyError, setHistoryError] = React.useState(false);
+  const [historyRevision, setHistoryRevision] = React.useState(0);
+  const [loadingMore, setLoadingMore] = React.useState(false);
   const [hasMore, setHasMore] = React.useState(false); // drives the "load earlier" hint
   const agent = agents.find((a) => a.key === conv.agent_key);
   const currentProfileId = conv.llm_profile_id ?? null;
@@ -539,6 +608,7 @@ function ChatView({
   // page shows it immediately (issue #3: opening/refresh used to load the oldest
   // page, so the completed result was missing until another message advanced the
   // cursor). Older history streams in on scroll-up (loadEarlier below).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A retry reloads history for the same conversation.
   React.useEffect(() => {
     cursorRef.current = 0;
     earliestRef.current = 0;
@@ -546,6 +616,7 @@ function ChatView({
     setHasMore(false);
     setMessages([]);
     setHistoryLoaded(false);
+    setHistoryError(false);
     setRunning(false);
     let live = true;
     api
@@ -561,14 +632,15 @@ function ChatView({
         setHistoryLoaded(true);
       })
       .catch(() => {
-        // A source link can retry history through its locator; ordinary chats
-        // retain the existing usable empty state on a transient failure.
-        if (live) setHistoryLoaded(true);
+        if (live) {
+          setHistoryLoaded(true);
+          setHistoryError(true);
+        }
       });
     return () => {
       live = false;
     };
-  }, [conv.id]);
+  }, [conv.id, historyRevision]);
 
   // A trigger or another tab may start a turn while this conversation is open.
   // A false list snapshot must not stop the tail before its final messages load.
@@ -607,14 +679,23 @@ function ChatView({
     };
   }, [running, conv.id, onTitleMaybeChanged]);
 
-  const loadFocusPage = React.useCallback((before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE), [conv.id]);
+  const loadFocusPage = React.useCallback(
+    (before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE),
+    [conv.id],
+  );
   const mergeFocusPage = React.useCallback((page: { items: Activity[]; hasMore: boolean }) => {
     setMessages((prev) => mergeActivities(page.items, prev));
     earliestRef.current = page.items[0]?.seq ?? earliestRef.current;
     hasMoreRef.current = page.hasMore;
     setHasMore(page.hasMore);
   }, []);
-  const focusHistory = useApprovalHistory(approvalFocus.state?.source, historyLoaded, messages, loadFocusPage, mergeFocusPage);
+  const focusHistory = useApprovalHistory(
+    approvalFocus.state?.source,
+    historyLoaded,
+    messages,
+    loadFocusPage,
+    mergeFocusPage,
+  );
 
   // ---- transcript auto-scroll (open → bottom; stick to bottom unless scrolled up) ----
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -630,10 +711,12 @@ function ChatView({
     const vp = viewport();
     if (!vp) return;
     loadingMoreRef.current = true;
-    const prevH = vp.scrollHeight;
-    const prevTop = vp.scrollTop;
+    setLoadingMore(true);
     try {
       const r = await api.conversationHistory(conv.id, earliestRef.current, HISTORY_PAGE);
+      // Read at response time: the reader may move or expand a record while waiting.
+      const prevH = vp.scrollHeight;
+      const prevTop = vp.scrollTop;
       if (r.items.length) {
         setMessages((prev) => mergeActivities(r.items, prev));
         earliestRef.current = r.items[0].seq;
@@ -642,41 +725,27 @@ function ChatView({
       setHasMore(r.hasMore);
       requestAnimationFrame(() => {
         const v = viewport();
-        if (v) v.scrollTop = prevTop + (v.scrollHeight - prevH);
+        if (v && !atBottomRef.current) v.scrollTop = prevTop + (v.scrollHeight - prevH);
       });
     } catch {
       /* transient — a later scroll retries */
     } finally {
       loadingMoreRef.current = false;
+      setLoadingMore(false);
     }
   }, [conv.id, viewport]);
-  React.useEffect(() => {
-    const vp = viewport();
-    if (!vp) return;
-    const onScroll = () => {
-      if (approvalFocus.state && !focusHistory.ready) return;
-      atBottomRef.current = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 60;
-      if (vp.scrollTop <= 80) void loadEarlier(); // near top → pull an older page
-    };
-    vp.addEventListener("scroll", onScroll, { passive: true });
-    return () => vp.removeEventListener("scroll", onScroll);
-  }, [viewport, loadEarlier, approvalFocus.state, focusHistory.ready]);
-  // open/switch a conversation → jump to the latest (bottom)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: changing conversations intentionally retriggers the scroll reset.
-  React.useLayoutEffect(() => {
-    const vp = viewport();
-    if (vp) {
-      vp.scrollTop = vp.scrollHeight;
-      atBottomRef.current = true;
-    }
-  }, [conv.id, viewport]);
-  // new activity → stick to bottom only if the user is already pinned there
-  // biome-ignore lint/correctness/useExhaustiveDependencies: message and running changes intentionally retrigger bottom anchoring.
-  React.useLayoutEffect(() => {
-    if (approvalFocus.state || !atBottomRef.current) return;
-    const vp = viewport();
-    if (vp) vp.scrollTop = vp.scrollHeight;
-  }, [messages, running, viewport, approvalFocus.state]);
+  const onReachTop = React.useCallback(() => void loadEarlier(), [loadEarlier]);
+  const conversationScroll = useConversationScroll({
+    contentRef,
+    atBottomRef,
+    viewport,
+    sessionKey: conv.id,
+    activity: messages,
+    latestSeq: messages.findLast((message) => message.kind !== "usage")?.seq ?? 0,
+    paused: !!approvalFocus.state,
+    blockHistory: !!approvalFocus.state && !focusHistory.ready,
+    onReachTop,
+  });
 
   // Per-conversation token total, live — same accounting as the main-agent
   // console: completed runs' `result` sum + the in-progress run's latest `usage`.
@@ -710,7 +779,7 @@ function ChatView({
   // pickFiles uploads into this conversation's session dir (sessions/conv-<id>/
   // uploads/) and queues the returned metadata to send with the next message.
   async function pickFiles(files: File[]) {
-    if (files.length === 0) return;
+    if (files.length === 0 || drafts.getDraft(draftKey).uploading) return;
     setUploading(true);
     try {
       const r = await api.chatUpload("session", `conv-${conv.id}`, files);
@@ -726,19 +795,25 @@ function ChatView({
     const msg = input.trim();
     const atts = attachments;
     if (side.handleCommand(msg, () => setInput(""))) return;
-    if ((!msg && atts.length === 0) || sending || running) return;
+    const current = drafts.getDraft(draftKey);
+    if ((!msg && atts.length === 0) || current.sending || running || current.uploading) return;
     setSending(true);
     setInput("");
     setAttachments([]);
     try {
       await api.sendConversationMessage(conv.id, msg, atts.length ? atts : undefined);
-      // The live loop pulls the persisted human turn immediately. Sharing that
-      // fetch avoids racing a separate post-send request against the poller.
+      // The live loop pulls the persisted human turn immediately. Refreshing the
+      // parent also reaches a view reopened while this request was in flight.
       setRunning(true);
+      onConvUpdated();
     } catch (e) {
       toast.error("发送失败：" + (e as Error).message);
-      setInput(msg); // restore so the user doesn't lose their text
-      setAttachments(atts); // and their attachments
+      // Restore to the original recipient, keeping anything written after the
+      // user switched away and reopened this conversation during the request.
+      drafts.updateDraft(draftKey, (current) => ({
+        text: current.text ? `${msg}\n\n${current.text}` : msg,
+        attachments: [...atts, ...current.attachments.filter((item) => !atts.some((sent) => sent.path === item.path))],
+      }));
     } finally {
       setSending(false);
     }
@@ -760,79 +835,141 @@ function ChatView({
   }
 
   return (
-    <SideQuestionWorkspace side={side} label={agent?.name ?? conv.agent_key} composerLayout="inline">
-      {/* header: which agent + live + token meta */}
-      <div className="flex min-w-0 flex-wrap items-center gap-2 border-b px-4 py-2.5">
-        <Bot className="text-muted-foreground size-4 shrink-0" />
-        <span className="min-w-0 max-w-48 truncate text-sm font-medium">{agent?.name ?? conv.agent_key}</span>
-        <span className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">{conv.agent_key}</span>
-        {agent && !agent.builtin && (
-          <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
-            自定义
-          </Badge>
-        )}
-        {agent?.description && (
-          <span className="text-muted-foreground min-w-0 truncate text-xs">{agent.description}</span>
-        )}
-        {running && <LiveBadge />}
-        <SideQuestionButton side={side} />
-        <div className="text-muted-foreground ml-auto flex min-w-0 max-w-full items-center justify-end gap-x-3 gap-y-1 text-xs max-sm:w-full max-sm:flex-wrap">
-          {tokenTotal.turns > 0 && (
-            <span title="agent 循环轮次（模型调用次数）" className="tabular-nums">
-              {tokenTotal.turns} 轮
-            </span>
-          )}
-          {tokenTotal.any && (
-            <span title="input / cache(read) / output tokens" className="min-w-0 truncate tabular-nums">
-              input {fmtTokens(tokenTotal.i)} · cache {fmtTokens(tokenTotal.cr)} · output {fmtTokens(tokenTotal.o)}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <ApprovalExecutionFocus focus={approvalFocus} history={focusHistory} />
-
-      {/* messages */}
-      <ScrollArea type="auto" className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
-        <div className="min-w-0 max-w-full px-4 py-3" ref={contentRef}>
-          {messages.length === 0 && !running ? (
-            <div className="text-muted-foreground py-10 text-center text-sm">
-              开始和「{agent?.name ?? conv.agent_key}」对话
+    <ToolInspectorProvider scope={{ conversationId: conv.id }}>
+      <SideQuestionWorkspace side={side} label={agent?.name ?? conv.agent_key} composerLayout="inline">
+        <div className="flex min-w-0 items-center gap-3 border-b px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="min-w-0 truncate text-sm font-semibold" title={conv.title || "新对话"}>
+                {conv.title || "新对话"}
+              </h1>
+              {running && <LiveBadge />}
             </div>
-          ) : (
-            <>
-              {hasMore && (
-                <div className="text-muted-foreground/70 pb-2 text-center text-[11px]">向上滚动加载更早的消息…</div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{agent?.name ?? conv.agent_key}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <SideQuestionButton side={side} />
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button size="icon-sm" variant="ghost" aria-label="查看会话详情" title="会话详情">
+                  <InfoIcon />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-72 p-4">
+                <p className="font-medium">会话详情</p>
+                {agent?.description && <p className="text-muted-foreground text-xs">{agent.description}</p>}
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+                  <dt className="text-muted-foreground">Agent</dt>
+                  <dd className="break-all">
+                    {conv.agent_key}
+                    {agent && !agent.builtin ? "（自定义）" : ""}
+                  </dd>
+                  <dt className="text-muted-foreground">模型调用</dt>
+                  <dd>{tokenTotal.turns} 轮</dd>
+                  <dt className="text-muted-foreground">输入 Token</dt>
+                  <dd>{fmtTokens(tokenTotal.i)}</dd>
+                  <dt className="text-muted-foreground">缓存读取</dt>
+                  <dd>{fmtTokens(tokenTotal.cr)}</dd>
+                  <dt className="text-muted-foreground">输出 Token</dt>
+                  <dd>{fmtTokens(tokenTotal.o)}</dd>
+                </dl>
+              </PopoverContent>
+            </Popover>
+          </div>
+        </div>
+
+        <ApprovalExecutionFocus focus={approvalFocus} history={focusHistory} />
+
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <ScrollArea type="auto" className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
+            <div className={conversationReadingClassName} ref={contentRef}>
+              {!historyLoaded && messages.length === 0 ? (
+                <div
+                  role="status"
+                  className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"
+                >
+                  <Spinner className="size-4" />
+                  正在加载会话…
+                </div>
+              ) : historyError && messages.length === 0 ? (
+                <div role="alert" className="flex flex-col items-center gap-3 py-10 text-sm text-muted-foreground">
+                  无法加载会话记录
+                  <Button variant="outline" size="sm" onClick={() => setHistoryRevision((value) => value + 1)}>
+                    重试加载
+                  </Button>
+                </div>
+              ) : messages.length === 0 && !running ? (
+                <div className="text-muted-foreground py-10 text-center text-sm">
+                  开始和「{agent?.name ?? conv.agent_key}」对话
+                </div>
+              ) : (
+                <>
+                  {hasMore && (
+                    <div className="flex justify-center pb-3">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={loadingMore}
+                        onClick={() => {
+                          conversationScroll.holdPosition();
+                          void loadEarlier();
+                        }}
+                      >
+                        {loadingMore && <Spinner className="size-3" aria-hidden="true" />}
+                        {loadingMore ? "正在加载更早消息…" : "加载更早消息"}
+                      </Button>
+                    </div>
+                  )}
+                  <Transcript
+                    activity={messages}
+                    live={running}
+                    chat
+                    mode="conversation"
+                    fetchDetail={fetchDetail}
+                    focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined}
+                  />
+                </>
               )}
-              <Transcript activity={messages} live={running} chat fetchDetail={fetchDetail} focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined} />
-            </>
+            </div>
+          </ScrollArea>
+          {!conversationScroll.isAtBottom && (
+            <ConversationScrollButton
+              hasNewActivity={conversationScroll.hasNewActivity}
+              onClick={() => {
+                approvalFocus.close();
+                requestAnimationFrame(conversationScroll.jumpToLatest);
+              }}
+            />
           )}
         </div>
-      </ScrollArea>
 
-      <Composer
-        value={input}
-        onChange={setInput}
-        onSend={send}
-        disabled={running || sending}
-        allowBtw
-        placeholder={running ? "Agent 正在回复，可输入 /btw 提问…" : "输入消息，@ 引用记录，Enter 发送"}
-        running={running}
-        onStop={stop}
-        stopDisabled={stopping}
-        attachments={attachments}
-        onPickFiles={pickFiles}
-        onRemoveAttachment={(path) => setAttachments((p) => p.filter((x) => x.path !== path))}
-        uploading={uploading}
-      />
-      <LLMProfileRow
-        profiles={profiles}
-        selected={currentProfileId}
-        onChange={changeProfile}
-        disabled={running || sending}
-        rightSlot={<TodoPopover seq={latestTodoSeq} fetchDetail={fetchDetail} />}
-      />
-    </SideQuestionWorkspace>
+        <Composer
+          value={input}
+          onChange={setInput}
+          onSend={send}
+          disabled={running || sending || uploading}
+          allowBtw
+          placeholder={running ? "Agent 正在执行，可输入 /btw 旁路提问…" : "继续提问或补充要求，@ 引用已有记录…"}
+          recipient={agent?.name ?? conv.agent_key}
+          running={running}
+          onStop={stop}
+          stopDisabled={stopping}
+          attachments={attachments}
+          onPickFiles={pickFiles}
+          onRemoveAttachment={(path) => setAttachments((p) => p.filter((x) => x.path !== path))}
+          uploading={uploading}
+          footerSlot={
+            <LLMProfileRow
+              profiles={profiles}
+              selected={currentProfileId}
+              onChange={changeProfile}
+              disabled={running || sending}
+              rightSlot={<TodoPopover seq={latestTodoSeq} fetchDetail={fetchDetail} />}
+            />
+          }
+        />
+      </SideQuestionWorkspace>
+    </ToolInspectorProvider>
   );
 }
 
@@ -890,7 +1027,7 @@ const ConversationItem = React.memo(function ConversationItem({
     <div
       className={cn(
         "group flex min-w-0 items-center gap-1 rounded-md pr-1 transition-colors",
-        active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+        active ? "bg-accent text-accent-foreground" : "hover:bg-muted",
       )}
     >
       {selectionMode && (
@@ -937,7 +1074,12 @@ const ConversationItem = React.memo(function ConversationItem({
               </Badge>
             ) : null}
           </div>
-          <div className="text-muted-foreground flex min-w-0 items-center gap-1 text-[11px]">
+          <div
+            className={cn(
+              "flex min-w-0 items-center gap-1 text-xs",
+              active ? "text-accent-foreground" : "text-muted-foreground",
+            )}
+          >
             {showAgent && (
               <>
                 <Bot className="size-3 shrink-0" />
@@ -953,7 +1095,7 @@ const ConversationItem = React.memo(function ConversationItem({
                 minute: "2-digit",
               })}
             </span>
-            <span className="shrink-0 opacity-60">#{conv.id}</span>
+            <span className="shrink-0">#{conv.id}</span>
           </div>
         </button>
       )}
@@ -962,7 +1104,7 @@ const ConversationItem = React.memo(function ConversationItem({
           <Button
             variant="ghost"
             size="icon-sm"
-            className="text-muted-foreground shrink-0"
+            className={cn("shrink-0", active ? "text-accent-foreground" : "text-muted-foreground")}
             aria-label={`管理对话「${conv.title || "新对话"}」`}
           >
             <MoreHorizontalIcon />
@@ -1024,7 +1166,7 @@ function AgentGroupHeader({
       aria-expanded={!collapsed}
       title={collapsed ? `展开「${group.name}」` : `收起「${group.name}」`}
       className={cn(
-        "sticky top-0 z-10 flex min-w-0 items-center gap-1.5 rounded-md bg-card px-1.5 py-1 text-left font-medium text-[11px] transition-colors hover:bg-accent/50",
+        "sticky top-0 z-10 flex min-w-0 items-center gap-1.5 rounded-md bg-card px-1.5 py-1 text-left font-medium text-xs transition-colors hover:bg-muted",
         collapsed && hasActive ? "text-foreground" : "text-muted-foreground",
       )}
     >
@@ -1043,22 +1185,28 @@ function AgentGroupHeader({
 }
 
 export default function ChatPage() {
+  const drafts = useSessionDrafts();
   const [agents, setAgents] = React.useState<Agent[]>([]);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [convs, setConvs] = React.useState<Conversation[]>([]);
   const [agentFilter, setAgentFilter] = React.useState<string | null>(null);
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
+  const [listOpen, setListOpen] = React.useState(false);
   const [sourceRequested, setSourceRequested] = React.useState(false);
   const [convsLoaded, setConvsLoaded] = React.useState(false);
-  const selectConversation = React.useCallback((id: number | null) => {
-    if (id !== selectedId) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("approval");
-      setSourceRequested(false);
-      window.history.replaceState(null, "", url);
-    }
-    setSelectedId(id);
-  }, [selectedId]);
+  const selectConversation = React.useCallback(
+    (id: number | null) => {
+      if (id !== selectedId) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("approval");
+        setSourceRequested(false);
+        window.history.replaceState(null, "", url);
+      }
+      setSelectedId(id);
+      setListOpen(false);
+    },
+    [selectedId],
+  );
 
   const [renamingId, setRenamingId] = React.useState<number | null>(null);
   const [renameText, setRenameText] = React.useState("");
@@ -1073,19 +1221,16 @@ export default function ChatPage() {
   // Collapsed agent groups. Hydrated from localStorage after mount (not a lazy
   // useState init) so the server and client render the same first pass.
   const [collapsedAgents, setCollapsedAgents] = React.useState<Set<string>>(() => new Set());
-  // Pending text + uploaded attachments handed off from a draft that created a
-  // conversation via the paperclip, keyed by the new conversation id (consumed once
-  // by ChatView on mount; ids never repeat, so leftover entries are harmless).
-  const [pendingByConv, setPendingByConv] = React.useState<
-    Record<number, { input?: string; attachments?: ChatAttachment[] }>
-  >({});
 
   const conversationListSeq = React.useRef(0);
   const reloadConvs = React.useCallback(async () => {
     const seq = ++conversationListSeq.current;
     try {
       const items = await api.conversations();
-      if (seq === conversationListSeq.current) { setConvs(items); setConvsLoaded(true); }
+      if (seq === conversationListSeq.current) {
+        setConvs(items);
+        setConvsLoaded(true);
+      }
     } catch {
       // Preserve the selected transcript and list on a transient poll failure.
     }
@@ -1348,12 +1493,34 @@ export default function ChatPage() {
   return (
     <div
       data-content-padding="false"
-      className="flex h-[calc(100svh-3rem)] min-w-0 flex-col overflow-hidden p-3 sm:p-4 md:h-[calc(100svh-4rem)] md:p-6"
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-3 sm:p-4 xl:p-6"
     >
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 grid-rows-[minmax(10rem,15rem)_minmax(0,1fr)] gap-3 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:gap-4">
+      <ConversationWorkspace listOpen={listOpen}>
         {/* left: conversation list */}
-        <div className="bg-card flex flex-col overflow-hidden rounded-lg border">
-          <div className="flex flex-col gap-2 border-b p-2">
+        <div className="flex min-h-0 flex-col overflow-hidden border-b bg-muted/20 @min-[56rem]/conversations:border-b-0 @min-[56rem]/conversations:border-r">
+          <div className="flex items-center gap-2 px-3 py-2 @min-[56rem]/conversations:hidden">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-w-0 flex-1 justify-start px-0"
+              onClick={() => setListOpen((open) => !open)}
+              aria-expanded={listOpen}
+              aria-controls="conversation-list-panel"
+            >
+              <MessageSquareIcon />
+              <span className="min-w-0 truncate">{listOpen ? "收起会话列表" : "会话列表"}</span>
+              <ChevronDownIcon className={cn("ml-auto transition-transform", !listOpen && "-rotate-90")} />
+            </Button>
+            <Button size="icon-sm" variant="ghost" onClick={() => selectConversation(null)} aria-label="新建对话">
+              <PlusIcon />
+            </Button>
+          </div>
+          <div
+            className={cn(
+              "flex shrink-0 flex-col gap-2 border-b p-2",
+              !listOpen && "@max-[56rem]/conversations:hidden",
+            )}
+          >
             <Button size="sm" className="w-full" onClick={() => selectConversation(null)}>
               <PlusIcon /> 新建对话
             </Button>
@@ -1423,9 +1590,13 @@ export default function ChatPage() {
               ))}
           </div>
           <ScrollArea
+            id="conversation-list-panel"
             key={agentFilter === null ? "all" : `agent:${agentFilter}`}
             type="auto"
-            className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!"
+            className={cn(
+              "min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!",
+              !listOpen && "@max-[56rem]/conversations:hidden",
+            )}
           >
             <div className="flex min-w-0 flex-col gap-0.5 p-2">
               {filteredConversations.length === 0 && (
@@ -1504,14 +1675,14 @@ export default function ChatPage() {
         </div>
 
         {/* right: chat view */}
-        <div className="bg-card flex min-w-0 flex-col overflow-hidden rounded-lg border">
+        <div className="@container/conversation flex min-h-0 min-w-0 flex-col overflow-hidden bg-background">
           {selected ? (
             <ChatView
               key={selected.id}
               conv={selected}
               agents={agents}
               profiles={profiles}
-              initial={pendingByConv[selected.id]}
+              drafts={drafts}
               onTitleMaybeChanged={reloadConvs}
               onConvUpdated={reloadConvs}
             />
@@ -1528,7 +1699,11 @@ export default function ChatPage() {
                 // Insert the new conversation immediately so `selected` resolves to
                 // it on this render (switching to ChatView right away, before the
                 // async reloadConvs lands); reloadConvs then reconciles titles etc.
-                if (pending) setPendingByConv((p) => ({ ...p, [c.id]: pending }));
+                if (pending)
+                  drafts.updateDraft(`conversation:${c.id}`, {
+                    text: pending.input ?? "",
+                    attachments: pending.attachments ?? [],
+                  });
                 setConvs((prev) => {
                   if (prev.some((item) => item.id === c.id)) return prev;
                   const firstUnpinned = prev.findIndex((item) => !conversationIsPinned(item));
@@ -1536,12 +1711,13 @@ export default function ChatPage() {
                   return [...prev.slice(0, insertAt), c, ...prev.slice(insertAt)];
                 });
                 setSelectedId(c.id);
+                setListOpen(false);
                 void reloadConvs();
               }}
             />
           )}
         </div>
-      </div>
+      </ConversationWorkspace>
       <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

@@ -637,6 +637,30 @@ export interface ChatAttachment {
   abs?: string; // 绝对路径(scope=staging 暂存上传时返回;建任务前把它写进描述)
 }
 
+export interface ToolArtifact {
+  version: 1;
+  kind: "read" | "change" | "search" | "directory";
+  path: string;
+  working_dir: string;
+  operation?: "create" | "overwrite" | "edit";
+  before_exists?: boolean;
+  before?: string;
+  after?: string;
+  snapshot_available?: boolean;
+  unavailable_reason?: string;
+  truncated?: boolean;
+  line_start?: number;
+  line_end?: number;
+  query?: string;
+  entry_count?: number;
+  entries?: { path: string; line?: number; text?: string; count?: number }[];
+}
+
+export interface ActivityDetail {
+  detail: string;
+  metadata?: Activity["metadata"];
+}
+
 export interface Activity {
   seq: number;
   intent_id?: string;
@@ -650,6 +674,7 @@ export interface Activity {
   detail?: string;
   metadata?: {
     llm_transition?: LLMTransition;
+    tool_artifact?: ToolArtifact;
   };
   source_task_id?: string;
   inherited?: boolean;

@@ -23,7 +23,6 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useIsMobile } from "@/hooks/use-mobile";
 import type { SideQuestions } from "@/hooks/use-side-questions";
 import { cn } from "@/lib/utils";
 
@@ -40,9 +39,9 @@ const preparationLabels = {
 export function SideQuestionButton({ side }: { side: SideQuestions }) {
   if (!side.enabled) return null;
   return (
-    <Button variant="outline" size="sm" onClick={() => side.setOpen(true)} title="/btw 旁路提问">
+    <Button variant="outline" size="sm" onClick={() => side.setOpen(true)} title="/btw 旁路提问" aria-label="旁路提问">
       <MessageCircleQuestionIcon data-icon="inline-start" />
-      旁路提问
+      <span className="@max-[28rem]/conversation:hidden">旁路提问</span>
     </Button>
   );
 }
@@ -235,14 +234,35 @@ export function SideQuestionWorkspace({
   children: ReactNode;
   composerLayout?: ComposerLayout;
 }) {
-  const mobile = useIsMobile();
+  const workspace = useRef<HTMLDivElement>(null);
+  const [canDock, setCanDock] = useState(false);
+  useEffect(() => {
+    const element = workspace.current;
+    if (!element) return;
+    // Measure after navigation, session lists and file viewers have taken their
+    // space. A wide browser can still leave this conversation very narrow.
+    const measure = () => setCanDock(element.getBoundingClientRect().width >= 900);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const docked = canDock && side.open && side.enabled;
   return (
-    <>
+    <div
+      ref={workspace}
+      className="flex min-h-0 min-w-0 flex-1"
+      data-side-question-layout={canDock ? "docked" : "drawer"}
+    >
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 min-w-0 flex-1">
-        <ResizablePanel id="main-conversation" minSize="35%" className="flex min-h-0 min-w-0 flex-col">
+        <ResizablePanel
+          id="main-conversation"
+          minSize={docked ? "520px" : "0px"}
+          className="@container/conversation flex min-h-0 min-w-0 flex-col"
+        >
           {children}
         </ResizablePanel>
-        {side.open && side.enabled && !mobile && (
+        {docked && (
           <>
             <ResizableHandle withHandle />
             <ResizablePanel id="side-question" defaultSize="38%" minSize="280px" maxSize="65%">
@@ -251,7 +271,7 @@ export function SideQuestionWorkspace({
           </>
         )}
       </ResizablePanelGroup>
-      <Drawer open={mobile && side.open && side.enabled} onOpenChange={side.setOpen}>
+      <Drawer open={!canDock && side.open && side.enabled} onOpenChange={side.setOpen}>
         <DrawerContent className="h-[85svh]">
           <DrawerHeader className="sr-only">
             <DrawerTitle>旁路提问</DrawerTitle>
@@ -260,6 +280,6 @@ export function SideQuestionWorkspace({
           <SidePanel side={side} label={label} composerLayout={composerLayout} />
         </DrawerContent>
       </Drawer>
-    </>
+    </div>
   );
 }

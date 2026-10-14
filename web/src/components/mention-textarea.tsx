@@ -201,7 +201,6 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
               aria-label={props["aria-label"] ?? "消息，输入 @ 引用记录"}
               aria-autocomplete="list"
               aria-controls={open ? listId : undefined}
-              aria-expanded={open}
               aria-activedescendant={open && count ? `${listId}-${Math.min(activeIndex, count - 1)}` : undefined}
               onChange={(event) => {
                 pendingKeyboardIndex.current = null;

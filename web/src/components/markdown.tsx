@@ -23,7 +23,8 @@ const components: Components = {
     <blockquote className="my-1 border-l-2 border-border pl-2.5 text-muted-foreground" {...p} />
   ),
   pre: ({ node, ...p }) => (
-    <pre className="my-1.5 overflow-auto rounded-md bg-muted/70 p-2.5 text-xs leading-relaxed" {...p} />
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll long code blocks.
+    <pre tabIndex={0} className="my-1.5 overflow-auto rounded-md bg-muted/70 p-2.5 text-xs leading-relaxed" {...p} />
   ),
   code: ({ node, className, children, ...rest }) => {
     const block = /language-/.test(className || "");

