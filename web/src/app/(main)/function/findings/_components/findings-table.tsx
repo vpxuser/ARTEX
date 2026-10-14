@@ -152,7 +152,7 @@ export function FindingsTable({
               aria-label={selectAllLabel}
             />
           </TableHead>
-          <TableHead className="w-8" />
+          <TableHead className="w-8"><span className="sr-only">展开预览</span></TableHead>
           <TableHead className="w-20">严重度</TableHead>
           <TableHead>漏洞名称</TableHead>
           <TableHead className="w-44">资产</TableHead>
@@ -169,31 +169,20 @@ export function FindingsTable({
           const retest = f.finding_id ? activeRetests[f.finding_id] : undefined;
           return (
             <React.Fragment key={rowKey}>
-              <TableRow
-                className="cursor-pointer"
-                role="button"
-                tabIndex={0}
-                aria-expanded={open}
-                onClick={() => onToggleRow(f)}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-                  event.preventDefault();
-                  onToggleRow(f);
-                }}
-              >
+              <TableRow>
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   {f.finding_id && (
                     <Checkbox
                       checked={selectedIds.has(f.finding_id)}
                       onCheckedChange={(c) => onToggleSelected(f.finding_id as string, c === true)}
-                      aria-label="选择该漏洞"
+                      aria-label={`选择发现 ${f.name || f.vulnclass || f.finding_id}`}
                     />
                   )}
                 </TableCell>
                 <TableCell>
-                  <ChevronRightIcon
-                    className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")}
-                  />
+                  <Button size="icon-sm" variant="ghost" aria-label={`${open ? "收起" : "展开"}发现 ${f.name || f.vulnclass || "未分类"}`} aria-expanded={open} aria-controls={open ? `finding-preview-${rowKey}` : undefined} onClick={() => onToggleRow(f)}>
+                    <ChevronRightIcon className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")} />
+                  </Button>
                 </TableCell>
                 <TableCell>
                   <StatusBadge domain="severity" value={f.severity} dot />
@@ -239,7 +228,7 @@ export function FindingsTable({
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   {f.finding_id ? (
                     <Select value={f.status} onValueChange={(v) => onStatusChange(f, v as FindingStatus)}>
-                      <SelectTrigger size="sm" className="h-7 w-full border-none px-1 shadow-none focus-visible:ring-0">
+                      <SelectTrigger aria-label={`修改发现 ${f.name || f.vulnclass || f.finding_id} 的状态`} size="sm" className="h-7 w-full border-none px-1 shadow-none focus-visible:ring-0">
                         <StatusBadge domain="finding" value={f.status} dot />
                       </SelectTrigger>
                       <SelectContent position="popper" align="end">
@@ -326,7 +315,7 @@ export function FindingsTable({
                 </TableCell>
               </TableRow>
               {open && (
-                <TableRow className="hover:bg-transparent">
+                <TableRow id={`finding-preview-${rowKey}`} className="hover:bg-transparent">
                   {/* whitespace-normal 覆盖 TableCell 默认的 nowrap,否则展开区文字
                       被强制单行、直接溢出单元格。 */}
                   <TableCell colSpan={COLUMN_COUNT} className="bg-muted/30 whitespace-normal">
@@ -335,16 +324,18 @@ export function FindingsTable({
                       {f.finding_id && edit && (
                         <div className="flex flex-wrap items-end gap-3 rounded-md border bg-background px-3 py-2.5">
                           <div className="flex min-w-[12rem] flex-1 flex-col gap-1">
-                            <Label className="text-xs text-muted-foreground">漏洞名称</Label>
+                            <Label htmlFor={`finding-name-${rowKey}`} className="text-xs text-muted-foreground">漏洞名称</Label>
                             <Input
+                              id={`finding-name-${rowKey}`}
                               value={edit.name}
                               onChange={(e) => onEditChange((s) => (s ? { ...s, name: e.target.value } : s))}
                               placeholder="可读标题，留空回退类别"
                             />
                           </div>
                           <div className="flex min-w-[10rem] flex-col gap-1">
-                            <Label className="text-xs text-muted-foreground">类别</Label>
+                            <Label htmlFor={`finding-class-${rowKey}`} className="text-xs text-muted-foreground">类别</Label>
                             <Input
+                              id={`finding-class-${rowKey}`}
                               value={edit.vulnclass}
                               onChange={(e) => onEditChange((s) => (s ? { ...s, vulnclass: e.target.value } : s))}
                               placeholder="如 SQL Injection"
@@ -356,7 +347,7 @@ export function FindingsTable({
                               value={edit.severity}
                               onValueChange={(v) => onEditChange((s) => (s ? { ...s, severity: v as Severity } : s))}
                             >
-                              <SelectTrigger size="sm" className="w-28">
+                              <SelectTrigger aria-label="严重等级" size="sm" className="w-28">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>

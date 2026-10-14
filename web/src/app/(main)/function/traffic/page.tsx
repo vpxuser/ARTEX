@@ -136,6 +136,7 @@ export default function TrafficPage() {
   const [respMaxQ, setRespMaxQ] = React.useState("");
   const [sort, setSort] = useStoredSortPreference<SortField>(SORT_STORAGE_KEY, SORT_FIELDS, "ts", "desc");
 
+  const [loadError, setLoadError] = React.useState("");
   const [traffic, setTraffic] = React.useState<TrafficResp | null>(null);
   const [selected, setSelected] = React.useState<TrafficExchange | null>(null);
   const [detail, setDetail] = React.useState<TrafficDetail | null>(null);
@@ -212,10 +213,10 @@ export default function TrafficPage() {
           order: sort.direction,
         })
         .then((r) => {
-          if (alive) setTraffic(r);
+          if (alive) { setTraffic(r); setLoadError(""); }
         })
-        .catch(() => {
-          // Keep the last successful snapshot during transient refresh failures.
+        .catch((error) => {
+          if (alive) setLoadError(`流量加载失败：${(error as Error).message}`);
         });
       api
         .trafficHosts()
@@ -292,7 +293,7 @@ export default function TrafficPage() {
       })
       .catch((e) => {
         // Keep the confirmation open so the user can retry a failed deletion.
-        if (mode === "all") toast.error(`清空失败：${(e as Error).message}`);
+        toast.error(`删除失败：${(e as Error).message}`);
       })
       .finally(() => setDeleting(false));
   };
@@ -453,7 +454,7 @@ export default function TrafficPage() {
           </PopoverContent>
         </Popover>
         <div className="relative w-48">
-          <Input placeholder="host…" value={host} onChange={(e) => setHost(e.target.value)} className="h-8" />
+          <Input aria-label="目标主机" placeholder="host…" value={host} onChange={(e) => setHost(e.target.value)} className="h-8" />
         </div>
         <Button
           variant="destructive"
@@ -482,14 +483,14 @@ export default function TrafficPage() {
         <div className="relative max-w-sm flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="搜索全部（URL / 方法 / 类型 / 状态码…）"
+            aria-label="搜索流量记录" placeholder="搜索全部（URL / 方法 / 类型 / 状态码…）"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="h-8 pl-8"
           />
         </div>
         <Select value={method} onValueChange={setMethod}>
-          <SelectTrigger size="sm" className="w-32">
+          <SelectTrigger aria-label="请求方法" size="sm" className="w-32">
             <SelectValue placeholder="方法" />
           </SelectTrigger>
           <SelectContent>
@@ -502,7 +503,7 @@ export default function TrafficPage() {
           </SelectContent>
         </Select>
         <Select value={String(size)} onValueChange={(v) => setSize(Number(v))}>
-          <SelectTrigger size="sm" className="w-28">
+          <SelectTrigger aria-label="每页条数" size="sm" className="w-28">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -522,6 +523,7 @@ export default function TrafficPage() {
             variant="outline"
             size="icon"
             className="size-8"
+            aria-label="上一页"
             disabled={page <= 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
           >
@@ -534,6 +536,7 @@ export default function TrafficPage() {
             variant="outline"
             size="icon"
             className="size-8"
+            aria-label="下一页"
             disabled={page + 1 >= pageCount}
             onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
           >
@@ -542,12 +545,14 @@ export default function TrafficPage() {
         </div>
       </div>
 
+      {loadError && <div role="alert" className="flex items-center gap-2 rounded-md border p-3 text-sm text-destructive"><span>{loadError}{traffic ? "（保留上次结果）" : ""}</span><Button variant="outline" size="sm" onClick={() => setReloadTick((t) => t + 1)}>重试</Button></div>}
+
       {/* Advanced filters (issue #177): narrow 660k+ exchanges down to the one packet. */}
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5">
         <span className="pl-1 text-xs font-medium text-muted-foreground">高级筛选</span>
         <div className="relative w-56">
           <Input
-            placeholder="响应内容（正文关键词，≥3字）"
+            aria-label="响应正文关键词" placeholder="响应内容（正文关键词，≥3字）"
             value={body}
             onChange={(e) => setBody(e.target.value)}
             className="h-8"
@@ -555,14 +560,14 @@ export default function TrafficPage() {
         </div>
         <div className="relative w-52">
           <Input
-            placeholder="路径（如 /api/user/…）"
+            aria-label="请求路径" placeholder="路径（如 /api/user/…）"
             value={path}
             onChange={(e) => setPath(e.target.value)}
             className="h-8"
           />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger size="sm" className="w-28">
+          <SelectTrigger aria-label="响应状态码" size="sm" className="w-28">
             <SelectValue placeholder="状态码" />
           </SelectTrigger>
           <SelectContent>
@@ -579,7 +584,7 @@ export default function TrafficPage() {
           <Input
             type="number"
             min={0}
-            placeholder="最小(B)"
+            aria-label="响应最小字节数" placeholder="最小(B)"
             value={respMin}
             onChange={(e) => setRespMin(e.target.value)}
             className="h-8 w-24"
@@ -588,7 +593,7 @@ export default function TrafficPage() {
           <Input
             type="number"
             min={0}
-            placeholder="最大(B)"
+            aria-label="响应最大字节数" placeholder="最大(B)"
             value={respMax}
             onChange={(e) => setRespMax(e.target.value)}
             className="h-8 w-24"
@@ -706,7 +711,7 @@ export default function TrafficPage() {
                     <TableCell className="text-right text-xs tabular-nums">{fmtBytes(e.resp_len)}</TableCell>
                   </TableRow>
                 ))}
-                {exchanges.length === 0 && (
+                {exchanges.length === 0 && !loadError && (
                   <TableRow>
                     <TableCell colSpan={8} className="py-12 text-center text-sm text-muted-foreground">
                       {traffic === null ? "加载中…" : "没有匹配的流量。"}

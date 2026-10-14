@@ -1,13 +1,12 @@
 "use client";
 
 import * as React from "react";
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { ChevronRight, MailIcon, PlusCircleIcon } from "lucide-react";
-import { api } from "@/lib/api";
+import { ChevronRight } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
@@ -29,7 +28,9 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { getActiveNavUrl } from "@/navigation/sidebar/navigation-utils";
 import type {
   NavBadge,
   NavGroup,
@@ -85,36 +86,32 @@ function hasSubItems(item: NavMainItem): item is NavMainParentItem {
 }
 
 export function NavMain({ items }: NavMainProps) {
-  const rawPath = usePathname();
-  // 路由段含中文，pathname 可能是百分号编码，解码后再与导航 url 比较，保证高亮命中。
-  const path = (() => {
-    try {
-      return decodeURIComponent(rawPath);
-    } catch {
-      return rawPath;
-    }
-  })();
+  const path = usePathname();
+  const urls = items.flatMap((group) =>
+    group.items.flatMap((item) => (hasSubItems(item) ? item.subItems.map((sub) => sub.url) : [item.url])),
+  );
+  const activeUrl = getActiveNavUrl(path, urls);
 
   const isItemActive = (item: NavMainItem) => {
     if (hasSubItems(item)) {
-      return item.subItems.some((sub) => path.startsWith(sub.url));
+      return item.subItems.some((sub) => sub.url === activeUrl);
     }
 
-    return path === item.url;
+    return item.url === activeUrl;
   };
 
   const isSubItemActive = (url: string) => {
-    return path === url;
+    return url === activeUrl;
   };
 
   const isSubmenuOpen = (item: NavMainParentItem) => {
-    return item.subItems.some((sub) => path.startsWith(sub.url));
+    return item.subItems.some((sub) => sub.url === activeUrl);
   };
 
   return (
     <>
       {items.map((group) => (
-        <SidebarGroup key={group.id}>
+        <SidebarGroup key={group.id} className="group-data-[collapsible=icon]:px-0">
           {group.label && (
             <SidebarGroupLabel className="group-data-[collapsible=icon]:pointer-events-none">
               {group.label}
@@ -161,7 +158,7 @@ function NavItem({ item, isItemActive, isSubItemActive, isSubmenuOpen }: NavItem
   );
 }
 
-// InterceptPendingBadge polls /api/intercept/pending every 5 s and shows a red
+// InterceptPendingBadge polls /api/intercept/pending every 5 s and shows a count
 // count badge when there are unresolved approval requests.
 function InterceptPendingBadge() {
   const [count, setCount] = React.useState(0);
@@ -171,21 +168,31 @@ function InterceptPendingBadge() {
       try {
         const list = await api.interceptPending();
         if (live) setCount(list.length);
-      } catch { /* ignore */ }
+      } catch {
+        // Keep the last known count when polling temporarily fails.
+      }
     }
-    poll();
-    const t = setInterval(poll, 5000);
-    return () => { live = false; clearInterval(t); };
+    void poll();
+    const t = setInterval(() => void poll(), 5000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
   }, []);
   if (count === 0) return null;
   return (
-    <SidebarMenuBadge className="flex h-4.5 min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white shadow-sm ring-1 ring-amber-400/40">
+    <SidebarMenuBadge
+      aria-label={`${count} 个待审批请求`}
+      aria-live="polite"
+      className="flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-100 px-1 font-semibold text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200 leading-none shadow-sm ring-1 ring-amber-400/40"
+    >
       {count > 99 ? "99+" : count}
     </SidebarMenuBadge>
   );
 }
 
 function NavLinkItem({ item, isActive, showIconFallback }: NavLinkItemProps) {
+  const { isMobile, setOpenMobile } = useSidebar();
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild aria-disabled={item.disabled} tooltip={item.title} isActive={isActive}>
@@ -194,9 +201,14 @@ function NavLinkItem({ item, isActive, showIconFallback }: NavLinkItemProps) {
           href={item.url}
           target={item.newTab ? "_blank" : undefined}
           rel={item.newTab ? "noreferrer" : undefined}
+          aria-current={isActive ? "page" : undefined}
+          onClick={(event) => {
+            if (item.disabled) event.preventDefault();
+            else if (isMobile) setOpenMobile(false);
+          }}
         >
           <NavLinkIcon item={item} showFallback={showIconFallback} />
-          <span>{item.title}</span>
+          <span className="group-data-[collapsible=icon]:sr-only">{item.title}</span>
         </Link>
       </SidebarMenuButton>
       {item.id === "approvals" ? <InterceptPendingBadge /> : <NavItemBadge badge={item.badge} />}
@@ -220,6 +232,7 @@ function NavLinkIcon({ item, showFallback }: NavLinkIconProps) {
 
 function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemProps) {
   const Icon = item.icon;
+  const { isMobile, setOpenMobile } = useSidebar();
 
   return (
     <SidebarMenuItem>
@@ -227,7 +240,7 @@ function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemPro
         <DropdownMenuTrigger asChild>
           <SidebarMenuButton tooltip={item.title} isActive={isActive} disabled={item.disabled}>
             {Icon ? <Icon /> : <CollapsedIconFallback title={item.title} />}
-            <span>{item.title}</span>
+            <span className="group-data-[collapsible=icon]:sr-only">{item.title}</span>
           </SidebarMenuButton>
         </DropdownMenuTrigger>
 
@@ -244,6 +257,9 @@ function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemPro
                     target={subItem.newTab ? "_blank" : undefined}
                     rel={subItem.newTab ? "noreferrer" : undefined}
                     aria-current={isSubItemActive(subItem.url) ? "page" : undefined}
+                    onClick={() => {
+                      if (isMobile) setOpenMobile(false);
+                    }}
                     className="flex items-center gap-2"
                   >
                     {SubIcon && <SubIcon />}
@@ -261,6 +277,7 @@ function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemPro
 
 function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: NavCollapsibleItemProps) {
   const Icon = item.icon;
+  const { isMobile, setOpenMobile } = useSidebar();
 
   return (
     <Collapsible asChild defaultOpen={defaultOpen} className="group/collapsible">
@@ -268,7 +285,7 @@ function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: Na
         <CollapsibleTrigger asChild>
           <SidebarMenuButton tooltip={item.title} isActive={isActive} disabled={item.disabled}>
             {Icon && <Icon />}
-            <span>{item.title}</span>
+            <span className="group-data-[collapsible=icon]:sr-only">{item.title}</span>
             <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
           </SidebarMenuButton>
         </CollapsibleTrigger>
@@ -291,6 +308,11 @@ function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: Na
                       href={subItem.url}
                       target={subItem.newTab ? "_blank" : undefined}
                       rel={subItem.newTab ? "noreferrer" : undefined}
+                      aria-current={isSubItemActive(subItem.url) ? "page" : undefined}
+                      onClick={(event) => {
+                        if (subItem.disabled) event.preventDefault();
+                        else if (isMobile) setOpenMobile(false);
+                      }}
                     >
                       {SubIcon && <SubIcon />}
                       <span>{subItem.title}</span>

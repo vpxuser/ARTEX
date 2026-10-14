@@ -21,7 +21,7 @@ function AgentDetailInner() {
     <div className="flex flex-1 flex-col gap-4">
       <div className="flex items-center gap-2">
         <Button asChild variant="ghost" size="icon-sm">
-          <Link href="/system/agents">
+          <Link href="/system/agents" aria-label="返回 Agent 清单">
             <ArrowLeftIcon className="size-4" />
           </Link>
         </Button>

@@ -223,7 +223,7 @@ function SkillsOverview({
                 onClick={() => onSelect(s.name)}
                 className="group flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-muted"
               >
-                <span className="w-40 shrink-0 truncate font-mono text-xs" title={s.name}>{s.name}</span>
+                <span className="w-28 shrink-0 truncate font-mono text-xs sm:w-40" title={s.name}>{s.name}</span>
                 <span className="relative h-2 flex-1 overflow-hidden rounded-full bg-muted">
                   <span
                     className="absolute inset-y-0 left-0 rounded-full bg-primary/70"
@@ -299,12 +299,18 @@ export default function SkillsPage() {
   const [selected, setSelected] = React.useState<Selected | null>(null);
   const [visibility, setVisibility] = React.useState<Record<string, string[]>>({});
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
 
   // file editor
   const [fileContent, setFileContent] = React.useState("");
   const [fileLoading, setFileLoading] = React.useState(false);
+  const [fileError, setFileError] = React.useState("");
+  const [readAttempt, setReadAttempt] = React.useState(0);
   const [dirty, setDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const editorSnapshot = React.useRef({ selected, fileContent });
+  React.useEffect(() => { editorSnapshot.current = { selected, fileContent }; }, [selected, fileContent]);
 
   // inline create — using a ref to avoid stale closure in onBlur
   const [creating, setCreating] = React.useState<Creating>(null);
@@ -333,26 +339,32 @@ export default function SkillsPage() {
   // delete confirmation
   const [pendingDelete, setPendingDelete] = React.useState<PendingDelete>(null);
   const [deleting, setDeleting] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState("");
 
   // 调用统计：列表页的次数/最近调用随 api.skills() 一起回来；选中某个 skill 时再拉它的
   // 最近调用明细。missing = 被点名但不存在的 skill（想用但没有）。
   const [usageCalls, setUsageCalls] = React.useState<SkillCall[]>([]);
   const [usageLoading, setUsageLoading] = React.useState(false);
+  const [usageError, setUsageError] = React.useState("");
   const [missing, setMissing] = React.useState<MissingSkill[]>([]);
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  const load = React.useCallback(() => {
-    api.agents().then(setAgents).catch(() => {});
-    api.mcpServers().then(setMcpOptions).catch(() => {});
-    api.missingSkills().then(setMissing).catch(() => {});
-    api.skills().then((ss) => {
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const [ss, nextAgents, nextMcps, nextMissing] = await Promise.all([api.skills(), api.agents(), api.mcpServers(), api.missingSkills()]);
+      const visible = await Promise.all(ss.map(async (s) => [s.name, await api.skillVisibility(s.name)] as const));
       setSkills(ss);
-      ss.forEach((s) =>
-        api.skillVisibility(s.name)
-          .then((ids) => setVisibility((v) => ({ ...v, [s.name]: ids })))
-          .catch(() => {}),
-      );
-    }).catch(() => {});
+      setAgents(nextAgents);
+      setMcpOptions(nextMcps);
+      setMissing(nextMissing);
+      setVisibility(Object.fromEntries(visible));
+    } catch (e) {
+      setLoadError(`读取技能库失败：${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
@@ -403,21 +415,27 @@ export default function SkillsPage() {
   React.useEffect(() => {
     if (!selected || selected.path !== null) { setUsageCalls([]); return; }
     const name = selected.skill;
+    let active = true;
     setUsageLoading(true);
+    setUsageError("");
     api.skillUsage(name, 20)
-      .then((calls) => setUsageCalls(calls))
-      .catch(() => setUsageCalls([]))
-      .finally(() => setUsageLoading(false));
-  }, [selected]);
+      .then((calls) => { if (active) setUsageCalls(calls); })
+      .catch((e) => { if (active) setUsageError(`读取调用记录失败：${(e as Error).message}`); })
+      .finally(() => { if (active) setUsageLoading(false); });
+    return () => { active = false; };
+  }, [selected, readAttempt]);
 
   React.useEffect(() => {
     if (!selected || selected.path === null) { setFileContent(""); setDirty(false); return; }
+    let active = true;
     setFileLoading(true);
+    setFileError("");
     api.readSkillFile(selected.skill, selected.path)
-      .then((c) => { setFileContent(c); setDirty(false); })
-      .catch(() => toast.error("读取文件失败"))
-      .finally(() => setFileLoading(false));
-  }, [selected]);
+      .then((c) => { if (active) { setFileContent(c); setDirty(false); } })
+      .catch((e) => { if (active) setFileError(`读取文件失败：${(e as Error).message}`); })
+      .finally(() => { if (active) setFileLoading(false); });
+    return () => { active = false; };
+  }, [selected, readAttempt]);
 
   // ── Expand helpers ────────────────────────────────────────────────────────
   function toggleExpanded(key: string) {
@@ -490,47 +508,46 @@ export default function SkillsPage() {
   }
 
   async function deletePath(skill: string, path: string) {
-    try {
       await api.deleteSkillPath(skill, path);
       toast.success(`已删除：${path}`);
       if (selected?.skill === skill && selected.path === path) setSelected(null);
       load();
-    } catch (e) {
-      toast.error("删除失败：" + (e as Error).message);
-    }
   }
 
   async function deleteSkill(name: string) {
-    try {
       await api.deleteSkill(name);
       toast.success(`已删除 Skill：${name}`);
       if (selected?.skill === name) setSelected(null);
       load();
-    } catch (e) {
-      toast.error("删除失败：" + (e as Error).message);
-    }
   }
 
   async function runPendingDelete() {
     const p = pendingDelete;
     if (!p) return;
     setDeleting(true);
+    setDeleteError("");
     try {
       if (p.kind === "skill") await deleteSkill(p.skill);
       else await deletePath(p.skill, p.path);
+      setPendingDelete(null);
+    } catch (e) {
+      setDeleteError(`删除失败：${(e as Error).message}`);
     } finally {
       setDeleting(false);
-      setPendingDelete(null);
     }
   }
 
   async function saveFile() {
-    if (!selected || selected.path === null) return;
+    if (!selected || selected.path === null || saving || fileLoading || fileError) return;
+    const snapshot = { skill: selected.skill, path: selected.path, fileContent };
     setSaving(true);
     try {
-      await api.writeSkillFile(selected.skill, selected.path, fileContent);
+      await api.writeSkillFile(snapshot.skill, snapshot.path, snapshot.fileContent);
       toast.success("已保存");
-      setDirty(false);
+      const current = editorSnapshot.current;
+      if (current.selected?.skill === snapshot.skill && current.selected.path === snapshot.path) {
+        setDirty(current.fileContent !== snapshot.fileContent);
+      }
     } catch (e) {
       toast.error("保存失败：" + (e as Error).message);
     } finally { setSaving(false); }
@@ -604,6 +621,7 @@ export default function SkillsPage() {
         }
         <Input
           ref={inlineRef}
+          aria-label={creating?.kind === "dir" ? "新文件夹名称" : "新文件名称"}
           className="h-6 flex-1 px-1 py-0 font-mono text-xs"
           placeholder={creating?.kind === "dir" ? "folder-name" : "filename.py"}
           value={newEntryName}
@@ -632,25 +650,28 @@ export default function SkillsPage() {
             <div
               className="group relative flex cursor-pointer select-none items-center gap-1 rounded py-0.5 pr-1 text-sm hover:bg-muted"
               style={{ paddingLeft: baseIndent }}
-              onClick={() => toggleExpanded(key)}
             >
+              <button type="button" aria-expanded={open} aria-label={`展开文件夹 ${node.path}`}
+                className="flex min-w-0 flex-1 items-center gap-1 rounded text-left focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => toggleExpanded(key)}>
               <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
               {open
                 ? <FolderOpenIcon className="size-3.5 shrink-0 text-amber-500" />
                 : <FolderIcon className="size-3.5 shrink-0 text-amber-500" />
               }
               <span className="min-w-0 flex-1 truncate" title={node.path}>{node.name}</span>
+              </button>
               {/* Absolute so a long name can never push the actions out of view */}
-              <span className="absolute inset-y-0 right-1 hidden items-center gap-0.5 rounded bg-muted pl-1 group-hover:flex">
-                <Button size="icon" variant="ghost" className="size-5" title="新建文件"
+              <span className="absolute inset-y-0 right-1 flex items-center gap-0.5 rounded bg-muted pl-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                <Button size="icon" variant="ghost" className="size-6" title="新建文件" aria-label="新建文件"
                   onClick={(e) => { e.stopPropagation(); startCreate(skill, node.path, "file"); }}>
                   <FilePlusIcon className="size-3 text-muted-foreground" />
                 </Button>
-                <Button size="icon" variant="ghost" className="size-5" title="新建文件夹"
+                <Button size="icon" variant="ghost" className="size-6" title="新建文件夹" aria-label="新建文件夹"
                   onClick={(e) => { e.stopPropagation(); startCreate(skill, node.path, "dir"); }}>
                   <FolderPlusIcon className="size-3 text-muted-foreground" />
                 </Button>
-                <Button size="icon" variant="ghost" className="size-5" title="删除文件夹"
+                <Button size="icon" variant="ghost" className="size-6" title="删除文件夹" aria-label="删除文件夹"
                   onClick={(e) => { e.stopPropagation(); setPendingDelete({ kind: "dir", skill, path: node.path }); }}>
                   <Trash2Icon className="size-3 text-destructive" />
                 </Button>
@@ -677,16 +698,19 @@ export default function SkillsPage() {
             isSelected ? "bg-accent text-accent-foreground" : "hover:bg-muted",
           )}
           style={{ paddingLeft: baseIndent + 16 }}
-          onClick={() => setSelected({ skill, path: node.path })}
         >
+          <button type="button" aria-pressed={isSelected} aria-label={`打开文件 ${node.path}`}
+            className="flex min-w-0 flex-1 items-center gap-1 rounded text-left focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setSelected({ skill, path: node.path })}>
           <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-mono text-xs" title={node.path}>{node.name}</span>
+          </button>
           <span className={cn(
-            "absolute inset-y-0 right-1 hidden items-center rounded pl-1 group-hover:flex",
+            "absolute inset-y-0 right-1 flex items-center rounded pl-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100",
             isSelected ? "bg-accent" : "bg-muted",
           )}>
-            <Button size="icon" variant="ghost" className="size-5"
-              title="删除文件"
+            <Button size="icon" variant="ghost" className="size-6"
+              title="删除文件" aria-label="删除文件"
               onClick={(e) => { e.stopPropagation(); setPendingDelete({ kind: "file", skill, path: node.path }); }}>
               <Trash2Icon className="size-3 text-destructive" />
             </Button>
@@ -699,6 +723,9 @@ export default function SkillsPage() {
   const selectedSkill = selected
     ? skills.find((s) => s.name === selected.skill) ?? null
     : null;
+
+  if (loading && skills.length === 0) return <p role="status" className="p-4 text-sm text-muted-foreground">正在读取技能库…</p>;
+  if (loadError) return <div role="alert" className="grid gap-3 p-4 text-sm"><p>{loadError}</p><Button variant="outline" onClick={() => void load()}>重试</Button></div>;
 
   return (
     <div data-content-padding="false" className="flex flex-1 flex-col overflow-hidden">
@@ -733,9 +760,9 @@ export default function SkillsPage() {
           </Popover>
         )}
       </div>
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden sm:flex-row">
         {/* ── 左侧文件树 ── */}
-        <div className="flex w-64 shrink-0 flex-col border-r">
+        <div className="flex max-h-64 w-full shrink-0 flex-col border-b sm:max-h-none sm:w-64 sm:border-r sm:border-b-0">
           <div className="flex flex-col gap-2 border-b p-2">
             <Button size="sm" variant="outline" className="w-full" onClick={() => setNewOpen(true)}>
               <PlusIcon className="size-3.5" />新建 Skill
@@ -743,6 +770,7 @@ export default function SkillsPage() {
             <input
               ref={uploadRef}
               type="file"
+              aria-label="上传 Skill 压缩包"
               accept=".zip,application/zip"
               className="hidden"
               onChange={onUploadPick}
@@ -776,7 +804,11 @@ export default function SkillsPage() {
                         "group relative flex cursor-pointer select-none items-center gap-1 rounded px-2 py-1 text-sm",
                         isSkillSelected ? "bg-accent text-accent-foreground" : "hover:bg-muted",
                       )}
-                      onClick={() => {
+                    >
+                      <button type="button" aria-expanded={isOpen} aria-pressed={isSkillSelected}
+                        aria-label={`查看 Skill ${s.name}`}
+                        className="flex min-w-0 flex-1 items-center gap-1 rounded text-left focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => {
                         toggleExpanded(s.name);
                         setSelected({ skill: s.name, path: null });
                       }}
@@ -795,19 +827,20 @@ export default function SkillsPage() {
                           {s.calls}
                         </span>
                       )}
+                      </button>
                       <span className={cn(
-                        "absolute inset-y-0 right-1 hidden items-center gap-0.5 rounded pl-1 group-hover:flex",
+                        "absolute inset-y-0 right-1 flex items-center gap-0.5 rounded pl-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100",
                         isSkillSelected ? "bg-accent" : "bg-muted",
                       )}>
-                        <Button size="icon" variant="ghost" className="size-5" title="新建文件"
+                        <Button size="icon" variant="ghost" className="size-6" title="新建文件" aria-label="新建文件"
                           onClick={(e) => { e.stopPropagation(); startCreate(s.name, "", "file"); }}>
                           <FilePlusIcon className="size-3 text-muted-foreground" />
                         </Button>
-                        <Button size="icon" variant="ghost" className="size-5" title="新建文件夹"
+                        <Button size="icon" variant="ghost" className="size-6" title="新建文件夹" aria-label="新建文件夹"
                           onClick={(e) => { e.stopPropagation(); startCreate(s.name, "", "dir"); }}>
                           <FolderPlusIcon className="size-3 text-muted-foreground" />
                         </Button>
-                        <Button size="icon" variant="ghost" className="size-5" title="删除 Skill"
+                        <Button size="icon" variant="ghost" className="size-6" title="删除 Skill" aria-label="删除 Skill"
                           onClick={(e) => { e.stopPropagation(); setPendingDelete({ kind: "skill", skill: s.name }); }}>
                           <Trash2Icon className="size-3 text-destructive" />
                         </Button>
@@ -891,7 +924,7 @@ export default function SkillsPage() {
                       ))}
                     </div>
                   )}
-                  {usageLoading ? (
+                  {usageError ? <div role="alert" className="grid gap-2 text-sm"><p>{usageError}</p><Button variant="outline" onClick={() => setReadAttempt((n) => n + 1)}>重试调用记录</Button></div> : usageLoading ? (
                     <p className="text-xs text-muted-foreground">加载调用明细…</p>
                   ) : usageCalls.length > 0 ? (
                     <div className="rounded-md border">
@@ -925,13 +958,13 @@ export default function SkillsPage() {
                     ) : (
                       <div className="flex flex-wrap gap-x-4 gap-y-2">
                         {mcpOptions.map((m) => (
-                          <label key={m.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                          <Label key={m.id} className="flex cursor-pointer items-center gap-2 text-sm">
                             <Checkbox
                               checked={detailMcps.includes(m.name)}
                               onCheckedChange={(on) => toggleSkillMcp(selectedSkill.name, m.name, !!on)}
                             />
                             {m.name}
-                          </label>
+                          </Label>
                         ))}
                       </div>
                     )}
@@ -941,13 +974,13 @@ export default function SkillsPage() {
                     <Label className="text-xs text-muted-foreground">可见性（按 Agent 授权）</Label>
                     <div className="space-y-2">
                       {agents.map((a) => (
-                        <label key={a.key} className="flex cursor-pointer items-center gap-2 text-sm">
+                        <Label key={a.key} className="flex cursor-pointer items-center gap-2 text-sm">
                           <Checkbox
                             checked={(visibility[selectedSkill.name] ?? []).includes(a.id)}
                             onCheckedChange={() => toggleVisibility(selectedSkill.name, a.id, a.name)}
                           />
                           {a.name}
-                        </label>
+                        </Label>
                       ))}
                       {agents.length === 0 && (
                         <span className="text-xs text-muted-foreground">（暂无 Agent）</span>
@@ -965,14 +998,16 @@ export default function SkillsPage() {
                 <span className="font-medium text-foreground">{selected.skill}</span>
                 <span>/</span>
                 <span className="font-mono">{selected.path}</span>
-                <Button size="sm" className="ml-auto" onClick={saveFile} disabled={!dirty || saving}>
+                <Button size="sm" className="ml-auto" onClick={saveFile} disabled={!dirty || saving || fileLoading || !!fileError}>
                   {saving ? "保存中…" : "保存"}
                 </Button>
               </div>
-              {fileLoading ? (
+              {fileError ? <div role="alert" className="grid gap-2 text-sm"><p>{fileError}</p><Button variant="outline" onClick={() => setReadAttempt((n) => n + 1)}>重试读取</Button></div> : fileLoading ? (
                 <p className="text-xs text-muted-foreground">加载中…</p>
               ) : (
                 <Textarea
+                  aria-label={`编辑文件 ${selected?.path ?? ""}`}
+                  disabled={saving}
                   className="flex-1 resize-none font-mono text-xs"
                   value={fileContent}
                   onChange={(e) => { setFileContent(e.target.value); setDirty(true); }}
@@ -984,8 +1019,8 @@ export default function SkillsPage() {
       </div>
 
       {/* ── 删除二次确认 ── */}
-      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
-        <AlertDialogContent>
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o && !deleting) { setPendingDelete(null); setDeleteError(""); } }}>
+        <AlertDialogContent onEscapeKeyDown={(e) => { if (deleting) e.preventDefault(); }}>
           <AlertDialogHeader>
             <AlertDialogTitle>
               {pendingDelete?.kind === "skill" && `删除 Skill「${pendingDelete.skill}」？`}
@@ -1000,6 +1035,7 @@ export default function SkillsPage() {
                   : "此操作不可撤销。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {deleteError && <p role="alert" className="text-sm text-destructive">{deleteError}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
             <AlertDialogAction
@@ -1014,7 +1050,7 @@ export default function SkillsPage() {
 
       {/* ── 新建 Skill 对话框 ── */}
       <Sheet open={newOpen} onOpenChange={setNewOpen}>
-        <SheetContent side="right" className="flex w-full flex-col gap-0 data-[side=right]:sm:max-w-xl">
+        <SheetContent side="right" className="flex flex-col gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
           <SheetHeader className="px-4 pt-4">
             <SheetTitle>新建 Skill</SheetTitle>
           </SheetHeader>
@@ -1055,11 +1091,11 @@ export default function SkillsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label className="text-muted-foreground text-xs">license</Label>
-                  <Input placeholder="MIT / Proprietary" value={newLicense} onChange={(e) => setNewLicense(e.target.value)} />
+                  <Input aria-label="License" placeholder="MIT / Proprietary" value={newLicense} onChange={(e) => setNewLicense(e.target.value)} />
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-muted-foreground text-xs">compatibility</Label>
-                  <Input placeholder="需要 sqlmap、python3" value={newCompat} onChange={(e) => setNewCompat(e.target.value)} />
+                  <Input aria-label="兼容性要求" placeholder="需要 sqlmap、python3" value={newCompat} onChange={(e) => setNewCompat(e.target.value)} />
                 </div>
               </div>
               <div className="flex min-h-0 flex-1 flex-col gap-1.5">
@@ -1079,7 +1115,7 @@ export default function SkillsPage() {
               ) : (
                 <div className="flex flex-col gap-2">
                   {mcpOptions.map((m) => (
-                    <label key={m.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <Label key={m.id} className="flex cursor-pointer items-center gap-2 text-sm">
                       <Checkbox
                         checked={newMcps.includes(m.name)}
                         onCheckedChange={(on) =>
@@ -1087,7 +1123,7 @@ export default function SkillsPage() {
                         }
                       />
                       {m.name}
-                    </label>
+                    </Label>
                   ))}
                 </div>
               )}
@@ -1101,7 +1137,7 @@ export default function SkillsPage() {
               ) : (
                 <div className="flex flex-col gap-2">
                   {agents.map((a) => (
-                    <label key={a.key} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <Label key={a.key} className="flex cursor-pointer items-center gap-2 text-sm">
                       <Checkbox
                         checked={newVisibility.includes(a.id)}
                         onCheckedChange={(on) =>
@@ -1109,7 +1145,7 @@ export default function SkillsPage() {
                         }
                       />
                       {a.name}
-                    </label>
+                    </Label>
                   ))}
                 </div>
               )}

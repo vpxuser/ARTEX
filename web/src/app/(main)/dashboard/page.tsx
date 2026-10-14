@@ -6,6 +6,8 @@ import Link from "next/link";
 
 import {
   ActivityIcon,
+  AlertCircleIcon,
+  RefreshCwIcon,
   ArrowUpRightIcon,
   BugIcon,
   ClockIcon,
@@ -14,32 +16,23 @@ import {
   TargetIcon,
   ZapIcon,
 } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Progress } from "@/components/ui/progress";
 import { api } from "@/lib/api";
-import type {
-  Activity,
-  Agent,
-  ConvTokenSummary,
-  Finding,
-  InterceptPending,
-  LLMProfile,
-  MCPServer,
-  Settings,
-  SkillItem,
-  Stats,
-  Task,
-  TokenTotal,
-  Tool,
-  TrafficExchange,
-  UsageStats,
-} from "@/lib/types";
+import type { Activity } from "@/lib/types";
+import { DataState, useDashboardSource } from "./dashboard-data";
 import { cn } from "@/lib/utils";
+
+const loadTasks = async () => (await api.tasks()).tasks;
+const loadActivity = async () => (await api.activity(undefined, { limit: 30 })).items;
+const loadTraffic = async () => (await api.traffic(0, 50)).exchanges ?? [];
+const loadUsage = () => api.usageStats(365);
 
 // ── chart constants ───────────────────────────────────────────────────────────
 
@@ -88,10 +81,10 @@ const ASSET_COLORS: Record<string, string> = {
 };
 
 function statusColor(code: number): string {
-  if (code < 300) return "text-emerald-500";
-  if (code < 400) return "text-blue-400";
-  if (code < 500) return "text-amber-400";
-  return "text-red-400";
+  if (code < 300) return "text-emerald-800 dark:text-emerald-300";
+  if (code < 400) return "text-blue-700 dark:text-blue-300";
+  if (code < 500) return "text-amber-700 dark:text-amber-300";
+  return "text-red-700 dark:text-red-300";
 }
 
 function statusBg(code: number): string {
@@ -118,11 +111,11 @@ function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-center justify-between">
-      <div className="flex items-center gap-1.5 text-xs font-semibold">
+      <div className="flex items-center gap-1.5 text-sm font-semibold">
         <Icon className="size-3.5 text-muted-foreground" />
         {children}
       </div>
-      {sub && <span className="text-[10px] text-muted-foreground">{sub}</span>}
+      {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
     </div>
   );
 }
@@ -130,129 +123,45 @@ function SectionTitle({
 // ── page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  // data state
-  const [tasks, setTasks] = React.useState<Task[]>([]);
-  const [findings, setFindings] = React.useState<Finding[]>([]);
-  const [stats, setStats] = React.useState<Stats | null>(null);
-  const [settings, setSettings] = React.useState<Settings | null>(null);
-  const [pending, setPending] = React.useState<InterceptPending[]>([]);
-  const [activity, setActivity] = React.useState<Activity[]>([]);
-  const [tokens, setTokens] = React.useState<TokenTotal | null>(null);
-  const [convTokens, setConvTokens] = React.useState<ConvTokenSummary[]>([]);
-  const [usageStats, setUsageStats] = React.useState<UsageStats | null>(null);
-  const [assetCounts, setAssetCounts] = React.useState<Record<string, number>>({});
-  const [traffic, setTraffic] = React.useState<TrafficExchange[]>([]);
-  const [agents, setAgents] = React.useState<Agent[]>([]);
-  const [mcpServers, setMcpServers] = React.useState<MCPServer[]>([]);
-  const [skills, setSkills] = React.useState<SkillItem[]>([]);
-  const [tools, setTools] = React.useState<Tool[]>([]);
-  const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
-
-  // The task list is the most expensive dashboard source. Poll it independently
-  // so a large history cannot hold back every other dashboard panel.
-  React.useEffect(() => {
-    let alive = true;
-    let loading = false;
-    let signature = "";
-    const load = async () => {
-      if (loading) return;
-      loading = true;
-      try {
-        const tr = await api.tasks();
-        if (!alive) return;
-        const nextSignature = JSON.stringify(tr.tasks);
-        if (nextSignature !== signature) {
-          signature = nextSignature;
-          setTasks(tr.tasks);
-        }
-      } catch {
-        /* transient errors — next poll retries */
-      } finally {
-        loading = false;
-      }
-    };
-    void load();
-    const t = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
-
-  // The remaining fast sources stay batched so one poll causes a single render.
-  React.useEffect(() => {
-    let alive = true;
-    let loading = false;
-    const load = async () => {
-      if (loading) return;
-      loading = true;
-      try {
-        const [findings, stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
-          api.findings(),
-          api.stats(),
-          api.settings(),
-          api.interceptPending(),
-          api.activity(undefined, { limit: 30 }),
-          api.tokenStats(),
-          api.conversationTokens(),
-        ]);
-        if (!alive) return;
-        setFindings(findings);
-        setStats(stats);
-        setSettings(settings);
-        setPending(pending);
-        setActivity(activity.items);
-        setTokens(tokens.total ?? null);
-        setConvTokens(conversationTokens);
-      } catch {
-        // Preserve stale data and retry on the next interval.
-      } finally {
-        loading = false;
-      }
-    };
-    void load();
-    const timer = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
-
-  // slow poll: traffic, assets, system-static (every 15s)
-  React.useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const [traf, counts, agentList, mcpList, skillList, toolList, profileList, usage] = await Promise.all([
-          api.traffic(0, 50),
-          api.assetCounts(),
-          api.agents(),
-          api.mcpServers(),
-          api.skills(),
-          api.tools(),
-          api.llmProfiles(),
-          api.usageStats(365),
-        ]);
-        if (!alive) return;
-        setTraffic(traf.exchanges ?? []);
-        setAssetCounts(counts ?? {});
-        setAgents(agentList);
-        setMcpServers(mcpList);
-        setSkills(skillList);
-        setTools(toolList);
-        setLLMProfiles(profileList);
-        setUsageStats(usage);
-      } catch {
-        /* transient errors */
-      }
-    };
-    void load();
-    const t = setInterval(load, 15000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+  const taskSource = useDashboardSource("任务", loadTasks, 5000);
+  const findingSource = useDashboardSource("发现", api.findings, 5000);
+  const statsSource = useDashboardSource("系统状态", api.stats, 5000);
+  const settingsSource = useDashboardSource("系统配置", api.settings, 5000);
+  const pendingSource = useDashboardSource("待审批", api.interceptPending, 5000);
+  const activitySource = useDashboardSource("活动记录", loadActivity, 5000);
+  const conversationSource = useDashboardSource("会话用量", api.conversationTokens, 5000);
+  const assetSource = useDashboardSource("资产统计", api.assetCounts, 15000);
+  const trafficSource = useDashboardSource("流量记录", loadTraffic, 15000);
+  const profileSource = useDashboardSource("模型配置", api.llmProfiles, 15000);
+  const usageSource = useDashboardSource("逐次调用统计", loadUsage, 15000);
+  const tasks = taskSource.data ?? [];
+  const findings = findingSource.data ?? [];
+  const stats = statsSource.data;
+  const settings = settingsSource.data;
+  const pending = pendingSource.data ?? [];
+  const activity = activitySource.data ?? [];
+  const convTokens = conversationSource.data ?? [];
+  const assetCounts = assetSource.data ?? {};
+  const traffic = trafficSource.data ?? [];
+  const llmProfiles = profileSource.data ?? [];
+  const usageStats = usageSource.data;
+  const sources = [
+    taskSource,
+    findingSource,
+    statsSource,
+    settingsSource,
+    pendingSource,
+    activitySource,
+    conversationSource,
+    assetSource,
+    trafficSource,
+    profileSource,
+    usageSource,
+  ];
+  const failedSources = sources.filter((source) => source.error);
+  const refreshing = sources.some((source) => source.loading);
+  const hasLoaded = sources.some((source) => source.updatedAt !== null);
+  const latestUpdate = Math.max(...sources.map((source) => source.updatedAt ?? 0));
 
   // ── derived ───────────────────────────────────────────────────────────────
 
@@ -273,7 +182,21 @@ export default function DashboardPage() {
   const sortedTasks = React.useMemo(
     () =>
       [...tasks]
-        .sort((a, b) => (b.last_activity_unix ?? b.created_unix ?? 0) - (a.last_activity_unix ?? a.created_unix ?? 0))
+        .sort((a, b) => {
+          const priority: Record<string, number> = {
+            running: 0,
+            paused: 1,
+            failed: 2,
+            timeout: 2,
+            queued: 3,
+            created: 4,
+            done: 5,
+          };
+          return (
+            (priority[a.status] ?? 6) - (priority[b.status] ?? 6) ||
+            (b.last_activity_unix ?? b.created_unix ?? 0) - (a.last_activity_unix ?? a.created_unix ?? 0)
+          );
+        })
         .slice(0, 5),
     [tasks],
   );
@@ -321,7 +244,6 @@ export default function DashboardPage() {
 
   // system
   const activeProfile = llmProfiles.find((p) => p.is_default);
-  const enabledTools = tools.filter((t) => t.enabled);
   const pendingCount = pending.length;
 
   // ── token stats per LLM profile ──────────────────────────────────────────
@@ -469,136 +391,530 @@ export default function DashboardPage() {
   }, [usageStats, tokenDays, tokenTab, profileIdByName, defaultProfileId]);
 
   const dailyTokenData = tokenVersion === "new" ? dailyTokenDataNew : dailyTokenDataOld;
+  const tokenSources =
+    tokenVersion === "new" ? [usageSource, profileSource] : [taskSource, conversationSource, profileSource];
+  const attentionTasks = (tasksByStatus.failed ?? 0) + (tasksByStatus.timeout ?? 0);
+  const highRiskFindings = findingsBySev.critical + findingsBySev.high;
 
   // activity kind label
   function kindLabel(a: Activity): string {
-    if (a.kind === "tool_use") return a.tool ?? "tool_use";
-    if (a.kind === "tool_result") return "tool_result";
-    return a.kind;
-  }
-
-  function workerColor(w: string): string {
-    if (w === "planner") return "text-violet-400";
-    if (w === "mainagent") return "text-cyan-400";
-    return "text-blue-400";
+    if (a.kind === "tool_use") return a.tool ?? "工具调用";
+    if (a.kind === "tool_result") return "工具结果";
+    return (
+      (
+        { user: "用户消息", assistant: "助手消息", thinking: "分析", system: "系统消息", error: "错误" } as Record<
+          string,
+          string
+        >
+      )[a.kind] ?? "活动记录"
+    );
   }
 
   function workerBg(w: string): string {
-    if (w === "planner") return "bg-violet-500/10 text-violet-400 border-violet-500/20";
-    if (w === "mainagent") return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
-    return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+    if (w === "planner") return "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20";
+    if (w === "mainagent") return "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/20";
+    return "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20";
   }
 
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-1 flex-col gap-4 pb-6">
-      {/* ── Header ── */}
-      <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">总览</h1>
-          <p className="text-xs text-muted-foreground">系统全局状态 · 实时刷新</p>
+          <h1 className="text-xl font-semibold tracking-tight">总览</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {failedSources.length > 0
+              ? hasLoaded
+                ? "部分数据更新失败"
+                : "数据加载失败"
+              : hasLoaded
+                ? "任务每 5 秒自动更新 · 资源每 15 秒自动更新"
+                : "正在加载系统数据…"}
+            {latestUpdate > 0 && (
+              <span className="ml-2 inline-block">
+                最近成功更新 {new Date(latestUpdate).toLocaleTimeString("zh-CN", { hour12: false })}
+              </span>
+            )}
+          </p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => sources.forEach((source) => source.refresh())}
+          disabled={refreshing}
+        >
+          <RefreshCwIcon className={cn("size-3.5", refreshing && "animate-spin")} />
+          {refreshing ? "正在刷新" : failedSources.length > 0 ? "重试失败数据" : "刷新数据"}
+        </Button>
+      </div>
+      {failedSources.length > 0 && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm"
+        >
+          <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-300" />
+          <div className="min-w-0">
+            <p className="font-medium">{hasLoaded ? "部分数据暂时无法更新" : "无法获取总览数据"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {failedSources.map((source) => source.label).join("、")}
+              请求失败。已获取的数据会保留，各模块标明上次更新时间；恢复连接后可重试。
+            </p>
+          </div>
+        </div>
+      )}
+
+      <section aria-label="需要关注" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[
+          {
+            label: "待审批命令",
+            count: pendingCount,
+            source: pendingSource,
+            href: "/system/intercept/approvals",
+            detail: "查看并处理拦截请求",
+          },
+          {
+            label: "异常任务",
+            count: attentionTasks,
+            source: taskSource,
+            href: "/function/tasks",
+            detail: "执行失败或超时的任务",
+          },
+          {
+            label: "高风险发现",
+            count: highRiskFindings,
+            source: findingSource,
+            href: "/function/findings",
+            detail: "严重与高危发现",
+          },
+        ].map(({ label, count, source, href, detail }) => (
+          <Card
+            key={label}
+            className={cn("gap-2 p-4", source.data !== undefined && count > 0 && "border-amber-500/40")}
+          >
+            <DataState sources={[source]} compact>
+              <Link
+                href={href}
+                className="group flex items-center justify-between gap-3 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div>
+                  <div className="text-sm font-medium">{label}</div>
+                  <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-semibold tabular-nums">{count}</span>
+                  <ArrowUpRightIcon className="size-4 text-muted-foreground group-hover:text-foreground" />
+                </div>
+              </Link>
+            </DataState>
+          </Card>
+        ))}
+      </section>
+
+      {/* ── Row 4: 任务表格 ── */}
+      <Card className="overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <div className="flex items-center gap-1.5 text-sm font-semibold">
+            <ClockIcon className="size-3.5 text-muted-foreground" />
+            当前任务
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              {taskSource.data !== undefined ? `${tasks.length} 个任务` : "等待数据"}
+            </span>
+            <Link
+              href="/function/tasks"
+              className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              全部 <ArrowUpRightIcon className="size-3" />
+            </Link>
+          </div>
+        </div>
+        <DataState sources={[taskSource]} className="px-4 py-4">
+          <p className="px-4 pt-3 text-xs text-muted-foreground">优先展示运行、暂停与异常任务，最多 5 项。</p>
+          <div className="divide-y md:hidden">
+            {sortedTasks.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-muted-foreground">暂无任务</p>
+            ) : (
+              sortedTasks.map((t) => (
+                <article key={t.id} className="space-y-3 px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <Link
+                      href={`/function/tasks/detail?id=${t.id}`}
+                      className="min-w-0 flex-1 rounded-sm text-sm font-medium leading-relaxed hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <span className="line-clamp-2 break-words">
+                        {t.name?.trim() || t.description || `任务 ${t.id}`}
+                      </span>
+                      <span className="mt-1 block text-xs font-normal text-muted-foreground">任务 #{t.id}</span>
+                    </Link>
+                    <StatusBadge domain="task" value={t.status} dot className="shrink-0 text-xs" />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+                    <span>目标 {t.goals_total ? `${t.goals_met ?? 0}/${t.goals_total}` : "尚未设置"}</span>
+                    <span>执行中 {t.in_flight ?? 0}</span>
+                    <StatusBadge domain="engine" value={t.engine_mode ?? "idle"} className="text-xs" />
+                  </div>
+                  {Boolean(t.goals_total) && (
+                    <Progress
+                      aria-label="目标完成进度"
+                      value={Math.round(((t.goals_met ?? 0) / t.goals_total!) * 100)}
+                      className="h-1.5"
+                    />
+                  )}
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-muted-foreground">
+                      最近活动 {fmtRel(t.last_activity_unix ?? t.created_unix)}
+                    </span>
+                    <Link
+                      href={`/function/tasks/detail?id=${t.id}`}
+                      className="inline-flex min-h-8 items-center gap-1 font-medium hover:underline"
+                    >
+                      查看任务 <ArrowUpRightIcon className="size-3.5" />
+                    </Link>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+          {/* biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this scroll region to reach table columns. */}
+          <section className="hidden overflow-x-auto md:block" aria-label="当前任务表格，可横向滚动" tabIndex={0}>
+            <table className="w-full min-w-[720px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b">
+                  {["任务", "状态", "引擎", "目标进度", "在途", "最近活动"].map((h) => (
+                    <th key={h} className="px-4 py-2 text-left text-xs font-medium text-muted-foreground first:pl-4">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTasks.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                      暂无任务
+                    </td>
+                  </tr>
+                ) : (
+                  sortedTasks.map((t) => {
+                    const goalsPct = t.goals_total ? Math.round(((t.goals_met ?? 0) / t.goals_total) * 100) : null;
+                    return (
+                      <tr key={t.id} className="border-b last:border-0 transition-colors hover:bg-muted/30">
+                        <td className="max-w-xs px-4 py-3">
+                          <Link href={`/function/tasks/detail?id=${t.id}`} className="group flex flex-col">
+                            <span className="truncate font-medium group-hover:underline">
+                              {t.name?.trim() || t.description || `任务 ${t.id}`}
+                            </span>
+                            <span className="mt-0.5 truncate font-mono text-xs text-muted-foreground">{t.id}</span>
+                          </Link>
+                        </td>
+                        <td className="px-4 py-3">
+                          <StatusBadge domain="task" value={t.status} dot className="px-1.5 py-0 text-xs" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <StatusBadge
+                            domain="engine"
+                            value={t.engine_mode ?? "idle"}
+                            className="px-1.5 py-0 text-xs"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          {goalsPct !== null ? (
+                            <div className="flex items-center gap-2">
+                              <Progress
+                                aria-label={`${t.description}目标完成进度`}
+                                value={goalsPct}
+                                className="h-1 w-14"
+                              />
+                              <span className="tabular-nums text-muted-foreground">
+                                {t.goals_met ?? 0}/{t.goals_total}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums">
+                          {(t.in_flight ?? 0) > 0 ? (
+                            <span className="font-semibold">{t.in_flight}</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                          {fmtRel(t.last_activity_unix ?? t.created_unix)}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </section>
+        </DataState>
+      </Card>
+
+      {/* ── Row 3: 活动流 | 发现 ── */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {/* 活动流 */}
+        <Card className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-sm font-semibold">
+              <ActivityIcon className="size-3.5 text-muted-foreground" />
+              活动流
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {activitySource.data !== undefined
+                  ? `${activity.filter((a) => a.kind !== "usage").length} 条事件`
+                  : "等待数据"}
+              </span>
+              <Link
+                href="/function/tasks"
+                className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                查看任务 <ArrowUpRightIcon className="size-3" />
+              </Link>
+            </div>
+          </div>
+
+          <DataState sources={[activitySource]}>
+            <div className="mb-2.5 flex flex-wrap gap-1.5">
+              {(["tool_use", "tool_result", "text", "thinking", "result"] as const).map((kind) => {
+                const count = activity.filter((a) => a.kind === kind).length;
+                if (count === 0) return null;
+                return (
+                  <span key={kind} className="rounded border bg-muted/20 px-1.5 py-0.5 text-xs text-muted-foreground">
+                    {
+                      (
+                        {
+                          tool_use: "工具调用",
+                          tool_result: "工具结果",
+                          text: "消息",
+                          thinking: "分析",
+                          result: "执行结果",
+                        } as Record<string, string>
+                      )[kind]
+                    }{" "}
+                    <strong className="text-foreground/70">{count}</strong>
+                  </span>
+                );
+              })}
+            </div>
+
+            <div className="divide-y">
+              {recentActivity.length === 0 ? (
+                <div className="py-4 text-center text-xs text-muted-foreground">暂无活动记录</div>
+              ) : (
+                recentActivity.map((a) => (
+                  <div key={a.seq} className="flex gap-2.5 py-2">
+                    <span
+                      className={cn(
+                        "shrink-0 self-start rounded border px-1.5 py-0.5 font-mono text-xs",
+                        workerBg(a.worker),
+                      )}
+                    >
+                      {a.worker}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium">{kindLabel(a)}</div>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground">{a.summary}</div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <Badge variant="outline" className="px-1.5 py-0 text-xs text-muted-foreground">
+                        {kindLabel(a)}
+                      </Badge>
+                      <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">{fmtRel(a.ts)}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </DataState>
+        </Card>
+
+        {/* 发现 */}
+        <Card className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-sm font-semibold">
+              <BugIcon className="size-3.5 text-muted-foreground" />
+              发现
+            </div>
+            <Link
+              href="/function/findings"
+              className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              全部 <ArrowUpRightIcon className="size-3" />
+            </Link>
+          </div>
+
+          <DataState sources={[findingSource]}>
+            <div className="divide-y">
+              {recentFindings.length === 0 ? (
+                <div className="py-4 text-center text-xs text-muted-foreground">暂无发现</div>
+              ) : (
+                recentFindings.map((f) => (
+                  <div key={f.id} className="flex items-start gap-2 py-2">
+                    <StatusBadge domain="severity" value={f.severity} className="mt-0.5 shrink-0 px-1.5 py-0 text-xs" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-sm font-semibold">{f.vulnclass}</span>
+                        {f.task_description && (
+                          <span className="truncate text-xs text-muted-foreground">{f.task_description}</span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">{f.summary}</div>
+                    </div>
+                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{fmtRel(f.ts)}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </DataState>
+        </Card>
       </div>
 
+      <h2 className="mt-2 text-sm font-semibold">资源与用量</h2>
       {/* ── Row 1: 5 stat cards ── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        {/* 活跃任务 */}
+        {/* 运行任务 */}
         <Card className="gap-1">
-          <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <TargetIcon className="size-3" /> 活跃任务
-            </div>
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-2xl font-semibold tabular-nums">{tasksByStatus.running ?? 0}</span>
-              <span className="text-xs text-muted-foreground">/ {tasks.length}</span>
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px]">
-            {(tasksByStatus.running ?? 0) > 0 && <span className="text-blue-400">探索 {tasksByStatus.running}</span>}
-            {(tasksByStatus.paused ?? 0) > 0 && <span className="text-amber-400">暂停 {tasksByStatus.paused}</span>}
-            {(tasksByStatus.done ?? 0) > 0 && <span className="text-emerald-400">完成 {tasksByStatus.done}</span>}
-            {tasks.length === 0 && <span className="text-muted-foreground">暂无任务</span>}
-          </CardContent>
+          <DataState sources={[taskSource]} compact className="px-4 py-3">
+            <CardHeader className="pb-0">
+              <Link
+                href="/function/tasks"
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <TargetIcon className="size-3" /> 运行任务
+                </div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-semibold tabular-nums">{tasksByStatus.running ?? 0}</span>
+                  <span className="text-xs text-muted-foreground">/ {tasks.length}</span>
+                </div>
+              </Link>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs">
+              {(tasksByStatus.running ?? 0) > 0 && (
+                <span className="text-blue-700 dark:text-blue-300">运行 {tasksByStatus.running}</span>
+              )}
+              {(tasksByStatus.paused ?? 0) > 0 && (
+                <span className="text-amber-700 dark:text-amber-300">暂停 {tasksByStatus.paused}</span>
+              )}
+              {(tasksByStatus.done ?? 0) > 0 && (
+                <span className="text-emerald-800 dark:text-emerald-300">完成 {tasksByStatus.done}</span>
+              )}
+              {tasks.length === 0 && <span className="text-muted-foreground">暂无任务</span>}
+            </CardContent>
+          </DataState>
         </Card>
 
         {/* 确认发现 */}
         <Card className="gap-1">
-          <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <BugIcon className="size-3" /> 确认发现
-            </div>
-            <div className="text-2xl font-semibold tabular-nums">{findings.length}</div>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2.5 text-[10px]">
-            <span className="text-rose-500">严重 {findingsBySev.critical}</span>
-            <span className="text-red-400">高危 {findingsBySev.high}</span>
-            <span className="text-amber-400">中危 {findingsBySev.medium}</span>
-            <span className="text-slate-400">低危 {findingsBySev.low}</span>
-          </CardContent>
+          <DataState sources={[findingSource]} compact className="px-4 py-3">
+            <CardHeader className="pb-0">
+              <Link
+                href="/function/findings"
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <BugIcon className="size-3" /> 确认发现
+                </div>
+                <div className="text-2xl font-semibold tabular-nums">{findings.length}</div>
+              </Link>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2.5 text-xs">
+              <span className="text-rose-700 dark:text-rose-300">严重 {findingsBySev.critical}</span>
+              <span className="text-red-700 dark:text-red-300">高危 {findingsBySev.high}</span>
+              <span className="text-amber-700 dark:text-amber-300">中危 {findingsBySev.medium}</span>
+              <span className="text-slate-700 dark:text-slate-300">低危 {findingsBySev.low}</span>
+            </CardContent>
+          </DataState>
         </Card>
 
         {/* 资产节点 */}
         <Card className="gap-1">
-          <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <NetworkIcon className="size-3" /> 资产节点
-            </div>
-            <div className="text-2xl font-semibold tabular-nums">{totalAssets}</div>
-          </CardHeader>
-          <CardContent className="text-[10px] text-muted-foreground">跨任务共享</CardContent>
+          <DataState sources={[assetSource]} compact className="px-4 py-3">
+            <CardHeader className="pb-0">
+              <Link
+                href="/function/assets"
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <NetworkIcon className="size-3" /> 资产节点
+                </div>
+                <div className="text-2xl font-semibold tabular-nums">{totalAssets}</div>
+              </Link>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground">跨任务共享</CardContent>
+          </DataState>
         </Card>
 
-        {/* 流量交互 */}
+        {/* 最近流量 */}
         <Card className="gap-1">
-          <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <ActivityIcon className="size-3" /> 流量交互
-            </div>
-            <div className="text-2xl font-semibold tabular-nums">{traffic.length}</div>
-          </CardHeader>
-          <CardContent className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-            {settings?.traffic_capture ? (
-              <>
-                <LiveDot />
-                <span>录制中</span>
-              </>
-            ) : (
-              <span>捕获未开启</span>
-            )}
-          </CardContent>
+          <DataState sources={[trafficSource, settingsSource]} compact className="px-4 py-3">
+            <CardHeader className="pb-0">
+              <Link
+                href="/function/traffic"
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <ActivityIcon className="size-3" /> 最近流量
+                </div>
+                <div className="text-2xl font-semibold tabular-nums">{traffic.length}</div>
+              </Link>
+            </CardHeader>
+            <CardContent className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              {settings?.traffic_capture ? (
+                <>
+                  <LiveDot />
+                  <span>录制中 · 最近 50 条</span>
+                </>
+              ) : (
+                <span>捕获未开启</span>
+              )}
+            </CardContent>
+          </DataState>
         </Card>
 
         {/* LLM 用量 */}
-        <Card className="gap-1">
-          <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <ZapIcon className="size-3" /> Token 用量
-            </div>
-            <div className="text-2xl font-semibold tabular-nums">
-              {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
-            </div>
-          </CardHeader>
-          <CardContent className="text-[10px] text-muted-foreground">
-            入 {fmtTokens(displayedTokens.input)}（含缓存 {fmtTokens(displayedTokens.cacheRead)}）· 出{" "}
-            {fmtTokens(displayedTokens.output)}
-          </CardContent>
+        <Card className="gap-1 col-span-2 sm:col-span-1">
+          <DataState sources={[...tokenSources]} compact className="px-4 py-3">
+            <CardHeader className="pb-0">
+              <Link
+                href="#token-usage"
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <ZapIcon className="size-3" /> Token 用量
+                </div>
+                <div className="text-2xl font-semibold tabular-nums">
+                  {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
+                </div>
+              </Link>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground">
+              入 {fmtTokens(displayedTokens.input)}（含缓存 {fmtTokens(displayedTokens.cacheRead)}）· 出{" "}
+              {fmtTokens(displayedTokens.output)}
+            </CardContent>
+          </DataState>
         </Card>
       </div>
 
       {/* ── Row 2: LLM Token 消耗 ── */}
-      <Card className="p-4">
+      <Card id="token-usage" className="min-w-0 gap-0 p-4">
         {/* Header */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold">
+          <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
             <ZapIcon className="size-3.5 text-muted-foreground" />
             LLM Token 消耗
             {/* 数据源开关：旧版=activity 统计（含历史任务），新版=llm_usage 计量账本（更准，仅覆盖启用后） */}
             <div className="ml-1 flex gap-0.5 rounded-md border bg-muted/30 p-0.5">
               {(
                 [
-                  { v: "old", label: "旧版" },
-                  { v: "new", label: "新版" },
+                  { v: "old", label: "历史估算" },
+                  { v: "new", label: "逐次调用" },
                 ] as const
               ).map(({ v, label }) => (
                 <button
@@ -607,11 +923,11 @@ export default function DashboardPage() {
                   onClick={() => setTokenVersion(v)}
                   title={
                     v === "new"
-                      ? "新版：来自 llm_usage 计量账本，逐次调用精确、含中断消耗；仅覆盖启用后的数据"
-                      : "旧版：来自 activity 统计（含历史任务），中断消耗不计、无法精确到模型"
+                      ? "按实际调用时间统计，包含中断前已记录的消耗；仅覆盖计量启用后的记录"
+                      : "汇总历史任务与会话，用创建日期估算每日分布；可能缺少中断消耗"
                   }
                   className={cn(
-                    "rounded px-2 py-0.5 text-[9px] font-medium transition-colors",
+                    "min-h-8 whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition-colors",
                     tokenVersion === v
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground",
@@ -621,9 +937,6 @@ export default function DashboardPage() {
                 </button>
               ))}
             </div>
-            <span className="text-[10px] font-normal text-muted-foreground">
-              {tokenVersion === "new" ? "llm_usage" : "activity"}
-            </span>
           </div>
           {/* Profile tabs */}
           <div className="flex flex-wrap items-center gap-1">
@@ -631,7 +944,7 @@ export default function DashboardPage() {
               type="button"
               onClick={() => setTokenTab("all")}
               className={cn(
-                "rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors",
+                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
                 tokenTab === "all"
                   ? "bg-foreground text-background"
                   : "bg-muted/30 text-muted-foreground hover:text-foreground",
@@ -649,21 +962,21 @@ export default function DashboardPage() {
                   key={p.id}
                   onClick={() => setTokenTab(resolvedKey)}
                   className={cn(
-                    "flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors",
+                    "flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
                     tokenTab === resolvedKey
                       ? "bg-foreground text-background"
                       : "bg-muted/30 text-muted-foreground hover:text-foreground",
-                    !hasData && "opacity-40",
+                    !hasData && "text-muted-foreground",
                   )}
                 >
                   {p.name}
                   {p.is_default && (
                     <span
                       className={cn(
-                        "rounded px-1 py-0 text-[8px]",
+                        "rounded px-1 py-0 text-xs",
                         tokenTab === resolvedKey
                           ? "bg-background/20 text-background"
-                          : "bg-emerald-500/20 text-emerald-400",
+                          : "bg-emerald-500/20 text-emerald-800 dark:text-emerald-300",
                       )}
                     >
                       默认
@@ -675,370 +988,183 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Body: metrics left + bar chart right */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_1fr]">
-          {/* Left: key metrics */}
-          <div className="flex flex-col gap-4">
-            {/* Total */}
-            <div>
-              <div className="text-[10px] text-muted-foreground">合计 (输入+输出)</div>
-              <div className="mt-0.5 text-3xl font-bold tabular-nums tracking-tight">
-                {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
+        <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+          {tokenVersion === "new"
+            ? "逐次调用：按实际调用时间统计，覆盖计量启用后的记录，包含中断前已记录的消耗。总量汇总全部已记录调用；趋势展示最近一年内所选时段。"
+            : "历史估算：汇总现有任务与会话的累计用量，每日分布按创建日期估算，可能缺少中断消耗。总量不受下方趋势时间范围影响。"}
+        </p>
+        <DataState sources={tokenSources}>
+          {/* Body: metrics left + bar chart right */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_1fr]">
+            {/* Left: key metrics */}
+            <div className="flex flex-col gap-4">
+              {/* Total */}
+              <div>
+                <div className="text-xs text-muted-foreground">合计 (输入+输出)</div>
+                <div className="mt-0.5 text-3xl font-bold tabular-nums tracking-tight">
+                  {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{displayedTokens.taskCount} 个任务</div>
               </div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">{displayedTokens.taskCount} 个任务</div>
-            </div>
 
-            {/* Per-type bars */}
-            <div className="space-y-3">
+              {/* Per-type bars */}
+              <div className="space-y-3">
+                {(() => {
+                  // input 已含缓存；拆成不重叠三段：未命中输入 + 缓存命中 + 输出 = 总量。
+                  const total = displayedTokens.input + displayedTokens.output;
+                  return [
+                    {
+                      label: "输入(未命中)",
+                      value: displayedTokens.input - displayedTokens.cacheRead,
+                      barColor: dailyTrendConfig.input.color!,
+                      text: "text-blue-700 dark:text-blue-300",
+                    },
+                    {
+                      label: "缓存命中",
+                      value: displayedTokens.cacheRead,
+                      barColor: dailyTrendConfig.cacheRead.color!,
+                      text: "text-emerald-800 dark:text-emerald-300",
+                    },
+                    {
+                      label: "输出",
+                      value: displayedTokens.output,
+                      barColor: dailyTrendConfig.output.color!,
+                      text: "text-violet-700 dark:text-violet-300",
+                    },
+                  ].map(({ label, value, barColor, text }) => {
+                    const pct = total > 0 ? (value / total) * 100 : 0;
+                    return (
+                      <div key={label}>
+                        <div className="mb-1 flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">{label}</span>
+                          <span className={cn("font-mono font-semibold tabular-nums", text)}>{fmtTokens(value)}</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{ width: `${pct}%`, background: barColor }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+
+              {/* Cache hit rate */}
               {(() => {
-                // input 已含缓存；拆成不重叠三段：未命中输入 + 缓存命中 + 输出 = 总量。
-                const total = displayedTokens.input + displayedTokens.output;
-                return [
-                  {
-                    label: "输入(未命中)",
-                    value: displayedTokens.input - displayedTokens.cacheRead,
-                    barColor: dailyTrendConfig.input.color!,
-                    text: "text-blue-400",
-                  },
-                  {
-                    label: "缓存命中",
-                    value: displayedTokens.cacheRead,
-                    barColor: dailyTrendConfig.cacheRead.color!,
-                    text: "text-emerald-400",
-                  },
-                  {
-                    label: "输出",
-                    value: displayedTokens.output,
-                    barColor: dailyTrendConfig.output.color!,
-                    text: "text-violet-400",
-                  },
-                ].map(({ label, value, barColor, text }) => {
-                  const pct = total > 0 ? (value / total) * 100 : 0;
-                  return (
-                    <div key={label}>
-                      <div className="mb-1 flex items-center justify-between text-[10px]">
-                        <span className="text-muted-foreground">{label}</span>
-                        <span className={cn("font-mono font-semibold tabular-nums", text)}>{fmtTokens(value)}</span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{ width: `${pct}%`, background: barColor }}
-                        />
-                      </div>
-                    </div>
-                  );
-                });
+                // input 已含缓存 → 命中率 = 缓存命中 / 总输入。
+                const denominator = displayedTokens.input;
+                const hitPct = denominator > 0 ? Math.round((displayedTokens.cacheRead / denominator) * 100) : 0;
+                return (
+                  <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-xs">
+                    <span className="text-muted-foreground">缓存命中率</span>
+                    <span
+                      className={cn(
+                        "font-semibold tabular-nums",
+                        hitPct > 50 ? "text-emerald-800 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300",
+                      )}
+                    >
+                      {hitPct}%
+                    </span>
+                  </div>
+                );
               })()}
             </div>
 
-            {/* Cache hit rate */}
-            {(() => {
-              // input 已含缓存 → 命中率 = 缓存命中 / 总输入。
-              const denominator = displayedTokens.input;
-              const hitPct = denominator > 0 ? Math.round((displayedTokens.cacheRead / denominator) * 100) : 0;
-              return (
-                <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-[10px]">
-                  <span className="text-muted-foreground">缓存命中率</span>
-                  <span
-                    className={cn("font-semibold tabular-nums", hitPct > 50 ? "text-emerald-400" : "text-amber-400")}
-                  >
-                    {hitPct}%
-                  </span>
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* Right: daily bar chart */}
-          <div className="flex min-h-0 flex-col">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="flex gap-3 text-[9px] text-muted-foreground">
-                {(["input", "output", "cacheRead"] as const).map((k) => (
-                  <span key={k} className="flex items-center gap-1">
-                    <span
-                      className="inline-block size-2 rounded-sm"
-                      style={{ background: dailyTrendConfig[k].color }}
-                    />
-                    {dailyTrendConfig[k].label}
-                  </span>
-                ))}
-              </div>
-              <div className="flex gap-0.5 rounded-md border bg-muted/30 p-0.5">
-                {(
-                  [
-                    { days: 7, label: "7天" },
-                    { days: 30, label: "30天" },
-                    { days: 90, label: "3月" },
-                    { days: 180, label: "6月" },
-                    { days: 365, label: "一年" },
-                  ] as const
-                ).map(({ days, label }) => (
-                  <button
-                    type="button"
-                    key={days}
-                    onClick={() => setTokenDays(days)}
-                    className={cn(
-                      "rounded px-2.5 py-0.5 text-[9px] font-medium transition-colors",
-                      tokenDays === days
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {dailyTokenData.length === 0 ? (
-              <div
-                className="flex flex-1 items-center justify-center rounded-lg border bg-muted/10 text-xs text-muted-foreground"
-                style={{ minHeight: 180 }}
-              >
-                暂无数据
-              </div>
-            ) : (
-              <ChartContainer config={dailyTrendConfig} className="h-[200px] w-full">
-                <BarChart data={dailyTokenData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} maxBarSize={40}>
-                  <CartesianGrid vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    tickLine={false}
-                    axisLine={false}
-                    tick={{ fontSize: 10 }}
-                    tickMargin={6}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis
-                    tickFormatter={(v) => fmtTokens(Number(v))}
-                    tickLine={false}
-                    axisLine={false}
-                    tick={{ fontSize: 10 }}
-                    width={44}
-                  />
-                  <ChartTooltip
-                    cursor={false}
-                    content={
-                      <ChartTooltipContent
-                        indicator="line"
-                        formatter={(value, name) => (
-                          <div className="flex w-full items-center justify-between gap-4">
-                            <span>
-                              {(dailyTrendConfig as Record<string, { label: string }>)[String(name)]?.label ??
-                                String(name)}
-                            </span>
-                            <span className="font-mono font-semibold tabular-nums">{fmtTokens(Number(value))}</span>
-                          </div>
-                        )}
+            {/* Right: daily bar chart */}
+            <div className="flex min-h-0 min-w-0 flex-col">
+              <div className="mb-3 flex flex-col items-start gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                  {(["input", "output", "cacheRead"] as const).map((k) => (
+                    <span key={k} className="flex items-center gap-1 whitespace-nowrap">
+                      <span
+                        className="inline-block size-2 rounded-sm"
+                        style={{ background: dailyTrendConfig[k].color }}
                       />
-                    }
-                  />
-                  <Bar dataKey="input" stackId="1" fill="var(--color-input)" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="output" stackId="1" fill="var(--color-output)" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="cacheRead" stackId="1" fill="var(--color-cacheRead)" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ChartContainer>
-            )}
-          </div>
-        </div>
-      </Card>
-
-      {/* ── Row 3: 活动流 | 发现 ── */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {/* 活动流 */}
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
-              <ActivityIcon className="size-3.5 text-muted-foreground" />
-              活动流
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground">
-                {activity.filter((a) => a.kind !== "usage").length} 条事件
-              </span>
-              <Link
-                href="/function/tasks"
-                className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-              >
-                查看任务 <ArrowUpRightIcon className="size-3" />
-              </Link>
-            </div>
-          </div>
-
-          <div className="mb-2.5 flex flex-wrap gap-1.5">
-            {(["tool_use", "tool_result", "text", "thinking", "result"] as const).map((kind) => {
-              const count = activity.filter((a) => a.kind === kind).length;
-              if (count === 0) return null;
-              return (
-                <span key={kind} className="rounded border bg-muted/20 px-1.5 py-0.5 text-[9px] text-muted-foreground">
-                  {kind} <strong className="text-foreground/70">{count}</strong>
-                </span>
-              );
-            })}
-          </div>
-
-          <div className="divide-y">
-            {recentActivity.length === 0 ? (
-              <div className="py-4 text-center text-xs text-muted-foreground">暂无活动记录</div>
-            ) : (
-              recentActivity.map((a) => (
-                <div key={a.seq} className="flex gap-2.5 py-2">
-                  <span
-                    className={cn(
-                      "shrink-0 self-start rounded border px-1.5 py-0.5 font-mono text-[9px]",
-                      workerBg(a.worker),
-                    )}
-                  >
-                    {a.worker}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[11px] font-medium">{kindLabel(a)}</div>
-                    <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{a.summary}</div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <Badge variant="outline" className="px-1.5 py-0 text-[9px] text-muted-foreground">
-                      {a.kind}
-                    </Badge>
-                    <div className="mt-0.5 text-[9px] tabular-nums text-muted-foreground">{fmtRel(a.ts)}</div>
-                  </div>
+                      {dailyTrendConfig[k].label}
+                    </span>
+                  ))}
                 </div>
-              ))
-            )}
-          </div>
-        </Card>
-
-        {/* 发现 */}
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
-              <BugIcon className="size-3.5 text-muted-foreground" />
-              发现
-            </div>
-            <Link
-              href="/function/findings"
-              className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-            >
-              全部 <ArrowUpRightIcon className="size-3" />
-            </Link>
-          </div>
-
-          <div className="divide-y">
-            {recentFindings.length === 0 ? (
-              <div className="py-4 text-center text-xs text-muted-foreground">暂无发现</div>
-            ) : (
-              recentFindings.map((f) => (
-                <div key={f.id} className="flex items-start gap-2 py-2">
-                  <StatusBadge
-                    domain="severity"
-                    value={f.severity}
-                    className="mt-0.5 shrink-0 px-1.5 py-0 text-[10px]"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[11px] font-semibold">{f.vulnclass}</span>
-                      {f.task_description && (
-                        <span className="truncate text-[10px] text-muted-foreground">{f.task_description}</span>
+                <div className="flex max-w-full flex-wrap gap-0.5 rounded-md border bg-muted/30 p-0.5">
+                  {(
+                    [
+                      { days: 7, label: "7天" },
+                      { days: 30, label: "30天" },
+                      { days: 90, label: "3月" },
+                      { days: 180, label: "6月" },
+                      { days: 365, label: "一年" },
+                    ] as const
+                  ).map(({ days, label }) => (
+                    <button
+                      type="button"
+                      key={days}
+                      onClick={() => setTokenDays(days)}
+                      className={cn(
+                        "min-h-8 whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition-colors",
+                        tokenDays === days
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
                       )}
-                    </div>
-                    <div className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-muted-foreground">
-                      {f.summary}
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-[9px] tabular-nums text-muted-foreground">{fmtRel(f.ts)}</span>
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
-              ))
-            )}
-          </div>
-        </Card>
-      </div>
+              </div>
 
-      {/* ── Row 4: 任务表格 ── */}
-      <Card className="overflow-hidden p-0">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <div className="flex items-center gap-1.5 text-xs font-semibold">
-            <ClockIcon className="size-3.5 text-muted-foreground" />
-            任务
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground">{tasks.length} 个任务</span>
-            <Link
-              href="/function/tasks"
-              className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-            >
-              全部 <ArrowUpRightIcon className="size-3" />
-            </Link>
-          </div>
-        </div>
-        <table className="w-full border-collapse text-xs">
-          <thead>
-            <tr className="border-b">
-              {["任务", "状态", "引擎", "目标进度", "在途", "最近活动"].map((h) => (
-                <th
-                  key={h}
-                  className="px-4 py-2 text-left text-[9px] font-semibold uppercase tracking-widest text-muted-foreground first:pl-4"
+              {dailyTokenData.length === 0 ? (
+                <div
+                  className="flex flex-1 items-center justify-center rounded-lg border bg-muted/10 text-xs text-muted-foreground"
+                  style={{ minHeight: 180 }}
                 >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedTasks.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-xs text-muted-foreground">
-                  暂无任务
-                </td>
-              </tr>
-            ) : (
-              sortedTasks.map((t) => {
-                const goalsPct = t.goals_total ? Math.round(((t.goals_met ?? 0) / t.goals_total) * 100) : null;
-                return (
-                  <tr key={t.id} className="border-b last:border-0 transition-colors hover:bg-muted/30">
-                    <td className="max-w-xs px-4 py-3">
-                      <Link href={`/function/tasks/detail?id=${t.id}`} className="group flex flex-col">
-                        <span className="truncate font-medium group-hover:underline">{t.description}</span>
-                        <span className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{t.id}</span>
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge domain="task" value={t.status} dot className="px-1.5 py-0 text-[10px]" />
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge
-                        domain="engine"
-                        value={t.engine_mode ?? "idle"}
-                        className="px-1.5 py-0 text-[10px]"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      {goalsPct !== null ? (
-                        <div className="flex items-center gap-2">
-                          <Progress value={goalsPct} className="h-1 w-14" />
-                          <span className="tabular-nums text-muted-foreground">
-                            {t.goals_met ?? 0}/{t.goals_total}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums">
-                      {(t.in_flight ?? 0) > 0 ? (
-                        <span className="font-semibold">{t.in_flight}</span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                      {fmtRel(t.last_activity_unix ?? t.created_unix)}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+                  暂无数据
+                </div>
+              ) : (
+                <ChartContainer config={dailyTrendConfig} className="h-[200px] w-full">
+                  <BarChart data={dailyTokenData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} maxBarSize={40}>
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="date"
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 12 }}
+                      tickMargin={6}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      tickFormatter={(v) => fmtTokens(Number(v))}
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 12 }}
+                      width={44}
+                    />
+                    <ChartTooltip
+                      cursor={false}
+                      content={
+                        <ChartTooltipContent
+                          indicator="line"
+                          formatter={(value, name) => (
+                            <div className="flex w-full items-center justify-between gap-4">
+                              <span>
+                                {(dailyTrendConfig as Record<string, { label: string }>)[String(name)]?.label ??
+                                  String(name)}
+                              </span>
+                              <span className="font-mono font-semibold tabular-nums">{fmtTokens(Number(value))}</span>
+                            </div>
+                          )}
+                        />
+                      }
+                    />
+                    <Bar dataKey="input" stackId="1" fill="var(--color-input)" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="output" stackId="1" fill="var(--color-output)" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="cacheRead" stackId="1" fill="var(--color-cacheRead)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
+              )}
+            </div>
+          </div>
+        </DataState>
       </Card>
 
       {/* ── Row 5: 资产分布 | 流量状态码 | 拦截 & 待审批 ── */}
@@ -1049,161 +1175,172 @@ export default function DashboardPage() {
             资产分布
           </SectionTitle>
 
-          {assetByType.length === 0 ? (
-            <div className="py-6 text-center text-xs text-muted-foreground">暂无资产数据</div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {assetByType.map(([type, count]) => (
-                <div key={type} className="flex items-center gap-2 text-xs">
-                  <span className="w-8 shrink-0 text-right text-[10px] text-muted-foreground">
-                    {ASSET_TYPE_LABELS[type] ?? type}
-                  </span>
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={cn("h-full rounded-full", ASSET_COLORS[type] ?? "bg-slate-400")}
-                      style={{ width: `${(count / assetMax) * 100}%` }}
-                    />
+          <DataState sources={[assetSource]}>
+            {assetByType.length === 0 ? (
+              <div className="py-6 text-center text-xs text-muted-foreground">暂无资产数据</div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {assetByType.map(([type, count]) => (
+                  <div key={type} className="flex items-center gap-2 text-xs">
+                    <span className="w-12 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground">
+                      {ASSET_TYPE_LABELS[type] ?? type}
+                    </span>
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={cn("h-full rounded-full", ASSET_COLORS[type] ?? "bg-slate-400")}
+                        style={{ width: `${(count / assetMax) * 100}%` }}
+                      />
+                    </div>
+                    <span className="w-4 text-right tabular-nums">{count}</span>
                   </div>
-                  <span className="w-4 text-right tabular-nums">{count}</span>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
 
-          <div className="mt-3 border-t pt-3 text-[10px] text-muted-foreground">共 {totalAssets} 节点</div>
+            <div className="mt-3 border-t pt-3 text-xs text-muted-foreground">共 {totalAssets} 节点</div>
+          </DataState>
         </Card>
 
         {/* 流量状态码 */}
         <Card className="p-4">
-          <SectionTitle icon={ActivityIcon} sub={`${traffic.length} 次请求`}>
+          <SectionTitle
+            icon={ActivityIcon}
+            sub={trafficSource.data !== undefined ? `最近 ${traffic.length} 次请求` : "等待数据"}
+          >
             流量状态码
           </SectionTitle>
 
-          {/* bar chart */}
-          {trafficByCodes.length === 0 ? (
-            <div className="py-6 text-center text-xs text-muted-foreground">暂无流量数据</div>
-          ) : (
-            <>
-              <div className="mb-3 flex items-end gap-2" style={{ height: 52 }}>
-                {trafficByCodes.map(({ code, n }) => (
-                  <div key={code} className="flex flex-1 flex-col items-center gap-1">
-                    <span className="text-[9px] tabular-nums text-muted-foreground">{n}</span>
-                    <div
-                      className={cn("w-full min-h-1 rounded-sm", statusBg(code), "opacity-80")}
-                      style={{ height: Math.max(4, (n / trafficMax) * 36) }}
-                    />
-                    <span className={cn("text-[9px] font-mono", statusColor(code))}>{code}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="border-t pt-2.5">
-                <div className="mb-1.5 text-[10px] text-muted-foreground">最近请求</div>
-                <div className="flex flex-col gap-1.5">
-                  {recentTraffic.map((e) => (
-                    <div key={e.id} className="flex items-center gap-1.5 text-[10px]">
-                      <span
-                        className={cn(
-                          "shrink-0 rounded border px-1 py-0 font-mono text-[9px]",
-                          e.method === "GET"
-                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                            : "border-blue-500/30 bg-blue-500/10 text-blue-400",
-                        )}
-                      >
-                        {e.method}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                        {e.host}
-                        {e.url.replace(/^https?:\/\/[^/]+/, "").substring(0, 30)}
-                      </span>
-                      <span className={cn("shrink-0 font-mono text-[9px]", statusColor(e.status))}>{e.status}</span>
+          <DataState sources={[trafficSource]}>
+            {/* bar chart */}
+            {trafficByCodes.length === 0 ? (
+              <div className="py-6 text-center text-xs text-muted-foreground">暂无流量数据</div>
+            ) : (
+              <>
+                <div className="mb-3 flex items-end gap-2" style={{ height: 52 }}>
+                  {trafficByCodes.map(({ code, n }) => (
+                    <div key={code} className="flex flex-1 flex-col items-center gap-1">
+                      <span className="text-xs tabular-nums text-muted-foreground">{n}</span>
+                      <div
+                        className={cn("w-full min-h-1 rounded-sm", statusBg(code), "opacity-80")}
+                        style={{ height: Math.max(4, (n / trafficMax) * 36) }}
+                      />
+                      <span className={cn("text-xs font-mono", statusColor(code))}>{code}</span>
                     </div>
                   ))}
                 </div>
-              </div>
-            </>
-          )}
+
+                <div className="border-t pt-2.5">
+                  <div className="mb-1.5 text-xs text-muted-foreground">最近请求</div>
+                  <div className="flex flex-col gap-1.5">
+                    {recentTraffic.map((e) => (
+                      <div key={e.id} className="flex items-center gap-1.5 text-xs">
+                        <span
+                          className={cn(
+                            "shrink-0 rounded border px-1 py-0 font-mono text-xs",
+                            e.method === "GET"
+                              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+                              : "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
+                          )}
+                        >
+                          {e.method}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                          {e.host}
+                          {e.url.replace(/^https?:\/\/[^/]+/, "").substring(0, 30)}
+                        </span>
+                        <span className={cn("shrink-0 font-mono text-xs", statusColor(e.status))}>{e.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </DataState>
         </Card>
 
         {/* 系统状态 & 待审批 */}
         <Card className="p-4">
           <SectionTitle icon={ShieldCheckIcon}>系统状态</SectionTitle>
 
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
-              <div className="text-[10px] text-muted-foreground">LLM 配置</div>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "text-[10px]",
-                  stats?.llm_configured
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                    : "border-red-500/30 bg-red-500/10 text-red-400",
-                )}
-              >
-                {stats?.llm_configured ? "已配置" : "未配置"}
-              </Badge>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
-              <div className="text-[10px] text-muted-foreground">流量捕获</div>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "text-[10px]",
-                  settings?.traffic_capture
-                    ? "border-violet-500/30 bg-violet-500/10 text-violet-400"
-                    : "text-muted-foreground",
-                )}
-              >
-                {settings?.traffic_capture ? "开启" : "关闭"}
-              </Badge>
-            </div>
-
-            {activeProfile && (
+          <DataState sources={[statsSource, settingsSource, profileSource, pendingSource]}>
+            <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
-                <div className="text-[10px] text-muted-foreground">激活模型</div>
-                <span className="font-mono text-[10px]">{activeProfile.model}</span>
+                <div className="text-xs text-muted-foreground">LLM 配置</div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-xs",
+                    stats?.llm_configured
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+                      : "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
+                  )}
+                >
+                  {stats?.llm_configured ? "已配置" : "未配置"}
+                </Badge>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">流量捕获</div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-xs",
+                    settings?.traffic_capture
+                      ? "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {settings?.traffic_capture ? "开启" : "关闭"}
+                </Badge>
+              </div>
+
+              {activeProfile && (
+                <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">激活模型</div>
+                  <span className="font-mono text-xs">{activeProfile.model}</span>
+                </div>
+              )}
+            </div>
+
+            {/* pending approvals */}
+            {pendingCount > 0 && (
+              <div className="mt-3">
+                <div className="mb-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                  待审批 ({pendingCount})
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {pending.slice(0, 3).map((p) => (
+                    <Link
+                      key={p.id}
+                      href="/system/intercept/approvals"
+                      className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 hover:bg-amber-500/10"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium">{p.tool_name}</div>
+                        <div className="text-xs text-muted-foreground">{p.agent_name}</div>
+                      </div>
+                      <ArrowUpRightIcon className="size-3 shrink-0 text-amber-700 dark:text-amber-300" />
+                    </Link>
+                  ))}
+                  {pendingCount > 3 && (
+                    <Link
+                      href="/system/intercept/approvals"
+                      className="text-center text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      还有 {pendingCount - 3} 条…
+                    </Link>
+                  )}
+                </div>
               </div>
             )}
-          </div>
 
-          {/* pending approvals */}
-          {pendingCount > 0 && (
-            <div className="mt-3">
-              <div className="mb-1.5 text-[10px] font-medium text-amber-400">待审批 ({pendingCount})</div>
-              <div className="flex flex-col gap-1.5">
-                {pending.slice(0, 3).map((p) => (
-                  <Link
-                    key={p.id}
-                    href="/system/intercept/approvals"
-                    className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 hover:bg-amber-500/10"
-                  >
-                    <div className="min-w-0">
-                      <div className="text-[10px] font-medium">{p.tool_name}</div>
-                      <div className="text-[9px] text-muted-foreground">{p.agent_name}</div>
-                    </div>
-                    <ArrowUpRightIcon className="size-3 shrink-0 text-amber-400" />
-                  </Link>
-                ))}
-                {pendingCount > 3 && (
-                  <Link
-                    href="/system/intercept/approvals"
-                    className="text-center text-[10px] text-muted-foreground hover:text-foreground"
-                  >
-                    还有 {pendingCount - 3} 条…
-                  </Link>
-                )}
+            {pendingCount === 0 && (
+              <div className="mt-3 rounded-lg border bg-muted/10 px-3 py-3 text-center text-xs text-muted-foreground">
+                <ShieldCheckIcon className="mx-auto mb-1 size-4 text-emerald-800 dark:text-emerald-300/50" />
+                无待审批拦截
               </div>
-            </div>
-          )}
-
-          {pendingCount === 0 && (
-            <div className="mt-3 rounded-lg border bg-muted/10 px-3 py-3 text-center text-[10px] text-muted-foreground">
-              <ShieldCheckIcon className="mx-auto mb-1 size-4 text-emerald-500/50" />
-              无待审批拦截
-            </div>
-          )}
+            )}
+          </DataState>
         </Card>
       </div>
     </div>

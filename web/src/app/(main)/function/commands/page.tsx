@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
+import { formatToolData } from "@/lib/transcript-groups";
 import type { CommandRecord, ToolStat } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -24,19 +25,6 @@ function fmtTime(ts: string) {
     minute: "2-digit",
     second: "2-digit",
   });
-}
-
-// toolInput renders a tool's raw input for display. Bash's {"command":"..."} is
-// unwrapped to the bare command; other tools show their pretty-printed JSON args.
-function toolInput(raw: string): string {
-  try {
-    const obj = JSON.parse(raw);
-    if (obj && typeof obj.command === "string") return obj.command;
-    return JSON.stringify(obj, null, 2);
-  } catch {
-    /* not JSON */
-  }
-  return raw;
 }
 
 // truncate clips a string to maxLen characters.
@@ -58,12 +46,15 @@ export default function CommandsPage() {
 
   const [commands, setCommands] = React.useState<CommandRecord[]>([]);
   const [total, setTotal] = React.useState(0);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
+  const [reloadTick, setReloadTick] = React.useState(0);
 
   // 各工具调用次数。弹窗打开时才拉取（多一次聚合查询，不必每次翻页都付）。
   const [statsOpen, setStatsOpen] = React.useState(false);
   const [stats, setStats] = React.useState<ToolStat[]>([]);
   const [statsLoading, setStatsLoading] = React.useState(false);
+  const [statsError, setStatsError] = React.useState("");
 
   // Selected execution is rendered in a right-side detail sheet.
   const [selected, setSelected] = React.useState<CommandRecord | null>(null);
@@ -82,6 +73,7 @@ export default function CommandsPage() {
 
   // Load data.
   React.useEffect(() => {
+    void reloadTick; // Manual retry repeats the current request.
     let alive = true;
     setLoading(true);
     api
@@ -90,32 +82,32 @@ export default function CommandsPage() {
         if (!alive) return;
         setCommands(r.commands ?? []);
         setTotal(r.total ?? 0);
+        setLoadError("");
       })
-      .catch(() => {
-        if (!alive) return;
-        setCommands([]);
-        setTotal(0);
+      .catch((error) => {
+        if (alive) setLoadError((error as Error).message || "请求失败");
       })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [page, size, queryQ, taskFilter]);
+  }, [page, size, queryQ, taskFilter, reloadTick]);
 
   // 统计跟随筛选条件走，和表格描述的是同一批记录（但不分页）。
   React.useEffect(() => {
+    void reloadTick;
     if (!statsOpen) return;
     let alive = true;
     setStatsLoading(true);
     api
       .commandStats({ task: taskFilter || undefined, q: queryQ || undefined })
-      .then((r) => alive && setStats(r.stats ?? []))
-      .catch(() => alive && setStats([]))
+      .then((r) => { if (alive) { setStats(r.stats ?? []); setStatsError(""); } })
+      .catch((error) => { if (alive) setStatsError((error as Error).message || "请求失败"); })
       .finally(() => alive && setStatsLoading(false));
     return () => {
       alive = false;
     };
-  }, [statsOpen, queryQ, taskFilter]);
+  }, [statsOpen, queryQ, taskFilter, reloadTick]);
 
   const statsTotal = stats.reduce((n, s) => n + s.total, 0);
   const statsErrors = stats.reduce((n, s) => n + s.errors, 0);
@@ -140,6 +132,7 @@ export default function CommandsPage() {
         <div className="relative max-w-sm flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            aria-label="搜索工具或参数"
             placeholder="搜索工具 / 参数..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -147,13 +140,14 @@ export default function CommandsPage() {
           />
         </div>
         <Input
+          aria-label="按任务 ID 筛选"
           placeholder="任务 ID"
           className="h-8 w-28"
           value={taskFilter}
           onChange={(e) => setTaskFilter(e.target.value.replace(/\D/g, ""))}
         />
         <Select value={String(size)} onValueChange={(v) => setSize(Number(v))}>
-          <SelectTrigger size="sm" className="w-28">
+          <SelectTrigger aria-label="每页条数" size="sm" className="w-28">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -178,6 +172,7 @@ export default function CommandsPage() {
             variant="outline"
             size="icon"
             className="size-8"
+            aria-label="上一页"
             disabled={page <= 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
           >
@@ -190,6 +185,7 @@ export default function CommandsPage() {
             variant="outline"
             size="icon"
             className="size-8"
+            aria-label="下一页"
             disabled={page + 1 >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
           >
@@ -197,6 +193,13 @@ export default function CommandsPage() {
           </Button>
         </div>
       </div>
+
+      {loadError && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm">
+          <span className="text-destructive">工具执行记录加载失败：{loadError}{commands.length > 0 ? "（保留上次数据）" : ""}</span>
+          <Button size="sm" variant="outline" disabled={loading} onClick={() => setReloadTick((n) => n + 1)}>重试</Button>
+        </div>
+      )}
 
       {/* History table */}
       <div className="flex h-[calc(100vh-13rem)] min-h-0 flex-col">
@@ -211,18 +214,19 @@ export default function CommandsPage() {
                   <TableHead className="w-[110px]">工具</TableHead>
                   <TableHead>输入</TableHead>
                   <TableHead className="w-[60px]">状态</TableHead>
+                  <TableHead className="w-[90px]">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading && commands.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-12 text-center">
+                    <TableCell colSpan={7} className="py-12 text-center">
                       <Loader2Icon className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                     </TableCell>
                   </TableRow>
-                ) : commands.length === 0 ? (
+                ) : commands.length === 0 && !loadError ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={7} className="py-12 text-center text-sm text-muted-foreground">
                       暂无工具执行记录
                     </TableCell>
                   </TableRow>
@@ -248,8 +252,8 @@ export default function CommandsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="max-w-0">
-                        <code className="block truncate font-mono text-xs">
-                          {truncate(toolInput(cmd.command), CMD_MAX_LEN)}
+                        <code className="block truncate font-mono text-xs" title={formatToolData(cmd.command, "compact")}>
+                          {truncate(formatToolData(cmd.command, "compact"), CMD_MAX_LEN)}
                         </code>
                       </TableCell>
                       <TableCell>
@@ -258,11 +262,12 @@ export default function CommandsPage() {
                             失败
                           </Badge>
                         ) : (
-                          <Badge variant="secondary" className="text-xs text-emerald-600">
+                          <Badge variant="secondary" className="text-xs text-emerald-700 dark:text-emerald-400">
                             成功
                           </Badge>
                         )}
                       </TableCell>
+                      <TableCell><Button size="sm" variant="ghost" aria-label={`查看工具执行 #${cmd.id} 详情`} onClick={(event) => { event.stopPropagation(); setSelected(cmd); }}>查看详情</Button></TableCell>
                     </TableRow>
                   ))
                 )}
@@ -295,11 +300,12 @@ export default function CommandsPage() {
             </DialogDescription>
           </DialogHeader>
 
+          {statsError && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">统计加载失败：{statsError}<Button size="sm" variant="outline" disabled={statsLoading} onClick={() => setReloadTick((n) => n + 1)}>重试</Button></div>}
           {statsLoading && stats.length === 0 ? (
             <div className="py-10 text-center">
               <Loader2Icon className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
             </div>
-          ) : stats.length === 0 ? (
+          ) : stats.length === 0 && !statsError ? (
             <div className="py-10 text-center text-sm text-muted-foreground">暂无统计数据</div>
           ) : (
             <div className="-mr-2 max-h-[55vh] space-y-1 overflow-auto pr-2">
@@ -354,7 +360,7 @@ export default function CommandsPage() {
                       失败
                     </Badge>
                   ) : (
-                    <Badge variant="secondary" className="text-xs text-emerald-600">
+                    <Badge variant="secondary" className="text-xs text-emerald-700 dark:text-emerald-400">
                       成功
                     </Badge>
                   )}
@@ -365,7 +371,7 @@ export default function CommandsPage() {
                   <div className="border-b px-5 py-2 text-xs font-medium text-muted-foreground">输入 Input</div>
                   <div className="min-h-0 flex-1 overflow-auto">
                     <pre className="p-5 font-mono text-xs break-all whitespace-pre-wrap">
-                      {toolInput(selected.command)}
+                      {formatToolData(selected.command) || "（空）"}
                     </pre>
                   </div>
                 </div>
@@ -378,7 +384,7 @@ export default function CommandsPage() {
                         selected.is_error && "text-red-600 dark:text-red-400",
                       )}
                     >
-                      {selected.output || "（空）"}
+                      {formatToolData(selected.output) || "（空）"}
                     </pre>
                   </div>
                 </div>

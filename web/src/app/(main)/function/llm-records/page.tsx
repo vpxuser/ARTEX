@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { toast } from "sonner";
 import {
   RadioIcon,
   SearchIcon,
@@ -112,7 +113,7 @@ function CopyButton({ text }: { text: string }) {
       title={copied ? "已复制" : "复制内容"}
       onClick={copy}
     >
-      {copied ? <CheckIcon className="size-3 text-emerald-600" /> : <CopyIcon className="size-3" />}
+      {copied ? <CheckIcon className="size-3 text-emerald-700 dark:text-emerald-400" /> : <CopyIcon className="size-3" />}
     </Button>
   );
 }
@@ -128,17 +129,23 @@ export default function LLMRecordsPage() {
 
   const [records, setRecords] = React.useState<LLMRecordItem[]>([]);
   const [total, setTotal] = React.useState(0);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
+  const [tasksError, setTasksError] = React.useState("");
 
   // Recording on/off toggle (settings.llm_record; default off). When off the
   // backend records nothing.
   const [recEnabled, setRecEnabled] = React.useState(false);
   const [recBusy, setRecBusy] = React.useState(false);
+  const [recLoaded, setRecLoaded] = React.useState(false);
+  const [recError, setRecError] = React.useState("");
 
   // Inline detail panel (Burp-style split, not a dialog)
   const [selected, setSelected] = React.useState<LLMRecordItem | null>(null);
   const [detail, setDetail] = React.useState<LLMRecordDetail | null>(null);
   const [detailLoading, setDetailLoading] = React.useState(false);
+  const [detailError, setDetailError] = React.useState("");
+  const [detailRetry, setDetailRetry] = React.useState(0);
   // 归一化视图 / HTTP 原文视图。原文是排查 provider 侧问题的唯一依据：归一化视图
   // 不含工具 schema，响应里也没有 tool_use 块。
   const [rawView, setRawView] = React.useState(false);
@@ -162,15 +169,16 @@ export default function LLMRecordsPage() {
   const [deleting, setDeleting] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0); // manual refetch trigger
 
-  // Load recording toggle state on mount.
+  // Load recording toggle state on mount and retry.
   React.useEffect(() => {
+    void reloadTick;
     let alive = true;
     api
       .settings()
-      .then((s) => { if (alive) setRecEnabled(!!s.llm_record); })
-      .catch(() => {});
+      .then((s) => { if (alive) { setRecEnabled(!!s.llm_record); setRecLoaded(true); setRecError(""); } })
+      .catch((error) => { if (alive) setRecError((error as Error).message || "请求失败"); });
     return () => { alive = false; };
-  }, []);
+  }, [reloadTick]);
 
   const toggleRecording = async (on: boolean) => {
     setRecBusy(true);
@@ -178,7 +186,8 @@ export default function LLMRecordsPage() {
     try {
       const s = await api.setSettings({ llm_record: on });
       setRecEnabled(!!s.llm_record);
-    } catch {
+    } catch (error) {
+      toast.error("录制设置保存失败：" + (error as Error).message);
       setRecEnabled(!on); // revert on failure
     } finally {
       setRecBusy(false);
@@ -198,6 +207,7 @@ export default function LLMRecordsPage() {
 
   // Load list.
   React.useEffect(() => {
+    void reloadTick;
     let alive = true;
     setLoading(true);
     api
@@ -206,13 +216,14 @@ export default function LLMRecordsPage() {
         if (!alive) return;
         setRecords(r.records ?? []);
         setTotal(r.total ?? 0);
+        setLoadError("");
       })
-      .catch(() => {})
+      .catch((error) => { if (alive) setLoadError((error as Error).message || "请求失败"); })
       .finally(() => alive && setLoading(false));
     api
       .llmTasks()
-      .then((r) => { if (alive) setTasks(r.tasks ?? []); })
-      .catch(() => {});
+      .then((r) => { if (alive) { setTasks(r.tasks ?? []); setTasksError(""); } })
+      .catch((error) => { if (alive) setTasksError((error as Error).message || "请求失败"); });
     return () => { alive = false; };
   }, [page, size, sessionQ, model, pickedTask, reloadTick]);
 
@@ -229,26 +240,28 @@ export default function LLMRecordsPage() {
         setPage(0);
         setReloadTick((t) => t + 1);
       })
-      .catch(() => {})
+      .catch((error) => toast.error("删除失败：" + (error as Error).message))
       .finally(() => setDeleting(false));
   };
 
   // Lazy-load full request/response when a row is selected.
   React.useEffect(() => {
+    void detailRetry;
     if (!selected) {
       setDetail(null);
       return;
     }
     let alive = true;
     setDetailLoading(true);
+    setDetailError("");
     setDetail(null);
     api
       .llmRecordDetail(selected.id)
       .then((d) => { if (alive) setDetail(d); })
-      .catch(() => {})
+      .catch((error) => { if (alive) setDetailError((error as Error).message || "请求失败"); })
       .finally(() => { if (alive) setDetailLoading(false); });
     return () => { alive = false; };
-  }, [selected]);
+  }, [selected, detailRetry]);
 
   const totalPages = Math.max(1, Math.ceil(total / size));
   const rangeStart = total === 0 ? 0 : page * size + 1;
@@ -270,6 +283,7 @@ export default function LLMRecordsPage() {
         <div className="relative max-w-sm flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            aria-label="搜索会话 ID"
             placeholder="搜索 Session ID..."
             value={session}
             onChange={(e) => setSession(e.target.value)}
@@ -277,13 +291,14 @@ export default function LLMRecordsPage() {
           />
         </div>
         <Input
+          aria-label="按模型筛选"
           placeholder="Model"
           className="h-8 w-48"
           value={model}
           onChange={(e) => setModel(e.target.value)}
         />
         <Select value={pickedTask} onValueChange={setPickedTask}>
-          <SelectTrigger size="sm" className="w-56">
+          <SelectTrigger aria-label="按任务筛选" size="sm" className="w-56">
             <SelectValue placeholder="选择任务…" />
           </SelectTrigger>
           <SelectContent>
@@ -313,7 +328,7 @@ export default function LLMRecordsPage() {
           删除任务对话
         </Button>
         <Select value={String(size)} onValueChange={(v) => setSize(Number(v))}>
-          <SelectTrigger size="sm" className="w-28">
+          <SelectTrigger aria-label="每页条数" size="sm" className="w-28">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -332,7 +347,7 @@ export default function LLMRecordsPage() {
             size="sm"
             checked={recEnabled}
             onCheckedChange={toggleRecording}
-            disabled={recBusy}
+            disabled={recBusy || !recLoaded}
           />
           <label
             htmlFor="llm-rec-toggle"
@@ -341,7 +356,7 @@ export default function LLMRecordsPage() {
               recEnabled ? "text-foreground" : "text-muted-foreground",
             )}
           >
-            {recEnabled ? "录制中" : "已关闭"}
+            {!recLoaded ? "录制设置未加载" : recEnabled ? "录制中" : "已关闭"}
           </label>
         </div>
 
@@ -353,6 +368,7 @@ export default function LLMRecordsPage() {
             variant="outline"
             size="icon"
             className="size-8"
+            aria-label="上一页"
             disabled={page <= 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
           >
@@ -365,6 +381,7 @@ export default function LLMRecordsPage() {
             variant="outline"
             size="icon"
             className="size-8"
+            aria-label="下一页"
             disabled={page + 1 >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
           >
@@ -373,6 +390,10 @@ export default function LLMRecordsPage() {
         </div>
       </div>
 
+      {(loadError || tasksError || recError) && <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm">
+        <span className="text-destructive">{loadError ? `LLM 记录加载失败：${loadError}${records.length ? "（保留上次数据）" : ""}` : tasksError ? `任务筛选加载失败：${tasksError}` : `录制设置加载失败：${recError}`}</span>
+        <Button size="sm" variant="outline" disabled={loading} onClick={() => setReloadTick((n) => n + 1)}>重试</Button>
+      </div>}
       {/* History table + inline detail (Burp-style split) */}
       <div className="flex h-[calc(100vh-13rem)] min-h-0 flex-col gap-3">
         <Card className="flex min-h-0 flex-1 flex-col overflow-hidden py-0">
@@ -388,18 +409,19 @@ export default function LLMRecordsPage() {
                   <TableHead className="w-[70px]">延迟</TableHead>
                   <TableHead className="w-[90px]">Tokens</TableHead>
                   <TableHead className="w-[60px]">状态</TableHead>
+                  <TableHead className="w-[90px]">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading && records.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-12 text-center">
+                    <TableCell colSpan={9} className="py-12 text-center">
                       <Loader2Icon className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                     </TableCell>
                   </TableRow>
-                ) : records.length === 0 ? (
+                ) : records.length === 0 && !loadError ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-12 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={9} className="py-12 text-center text-sm text-muted-foreground">
                       暂无 LLM 调用记录
                     </TableCell>
                   </TableRow>
@@ -431,7 +453,7 @@ export default function LLMRecordsPage() {
                         <span className="text-xs font-mono">{rec.model || "-"}</span>
                       </TableCell>
                       <TableCell>
-                        <span className={cn("text-xs", rec.latency_ms > 30000 && "text-amber-500")}>
+                        <span className={cn("text-xs", rec.latency_ms > 30000 && "text-amber-700 dark:text-amber-400")}>
                           {fmtLatency(rec.latency_ms)}
                         </span>
                       </TableCell>
@@ -442,11 +464,12 @@ export default function LLMRecordsPage() {
                       </TableCell>
                       <TableCell>
                         {rec.status === "ok" ? (
-                          <Badge variant="secondary" className="text-xs text-emerald-600">OK</Badge>
+                          <Badge variant="secondary" className="text-xs text-emerald-700 dark:text-emerald-400">OK</Badge>
                         ) : (
                           <Badge variant="destructive" className="text-xs">Error</Badge>
                         )}
                       </TableCell>
+                      <TableCell><Button size="sm" variant="ghost" aria-controls={selected ? "llm-record-detail" : undefined} aria-label={`查看 LLM 记录 #${rec.id} 详情`} onClick={(event) => { event.stopPropagation(); setSelected(rec); }}>查看详情</Button></TableCell>
                     </TableRow>
                   ))
                 )}
@@ -457,7 +480,7 @@ export default function LLMRecordsPage() {
 
         {/* Inline detail panel */}
         {selected && (
-          <Card className="flex h-[42%] min-h-0 flex-col overflow-hidden py-0">
+          <Card id="llm-record-detail" role="region" aria-label={`LLM 记录 #${selected.id} 详情`} className="flex h-[42%] min-h-0 flex-col overflow-hidden py-0">
             {/* Detail header */}
             <div className="flex items-center gap-2 border-b px-3 py-2">
               <Badge variant="outline" className="text-xs font-mono">
@@ -477,11 +500,11 @@ export default function LLMRecordsPage() {
               <span className="text-xs text-muted-foreground">
                 {fmtTime(selected.ts)}
               </span>
-              <span className={cn("text-xs", selected.latency_ms > 30000 && "text-amber-500")}>
+              <span className={cn("text-xs", selected.latency_ms > 30000 && "text-amber-700 dark:text-amber-400")}>
                 {fmtLatency(selected.latency_ms)}
               </span>
               {selected.status === "ok" ? (
-                <Badge variant="secondary" className="text-xs text-emerald-600">OK</Badge>
+                <Badge variant="secondary" className="text-xs text-emerald-700 dark:text-emerald-400">OK</Badge>
               ) : (
                 <Badge variant="destructive" className="text-xs">Error</Badge>
               )}
@@ -501,11 +524,13 @@ export default function LLMRecordsPage() {
                 variant="ghost"
                 size="icon"
                 className="size-7 shrink-0"
+                aria-label="关闭记录详情"
                 onClick={() => setSelected(null)}
               >
                 <XIcon />
               </Button>
             </div>
+            {detailError && <div role="alert" className="flex items-center gap-2 p-3 text-sm text-destructive">详情加载失败：{detailError}<Button size="sm" variant="outline" onClick={() => setDetailRetry((n) => n + 1)}>重试</Button></div>}
             {/* Request / Response split */}
             <div className="grid min-h-0 flex-1 grid-cols-2 divide-x">
               <div className="flex min-h-0 min-w-0 flex-col">
@@ -521,7 +546,7 @@ export default function LLMRecordsPage() {
                     </div>
                   ) : (
                     <pre className="p-3 font-mono text-xs break-all whitespace-pre-wrap">
-                      {reqText || "（空）"}
+                      {detailError ? "" : reqText || "（空）"}
                     </pre>
                   )}
                 </div>
@@ -542,7 +567,7 @@ export default function LLMRecordsPage() {
                       "p-3 font-mono text-xs break-all whitespace-pre-wrap",
                       selected.status !== "ok" && "text-red-600 dark:text-red-400",
                     )}>
-                      {respText || "（空）"}
+                      {detailError ? "" : respText || "（空）"}
                     </pre>
                   )}
                 </div>

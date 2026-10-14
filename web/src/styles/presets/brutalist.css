@@ -1,5 +1,5 @@
 /* 
-label: Brutalist
+label: 硬朗风格
 value: brutalist 
 */
 
@@ -9,7 +9,7 @@ value: brutalist
   --card-foreground: oklch(0 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0 0 0);
-  --primary: oklch(0.6489 0.237 26.9728);
+  --primary: oklch(0.56 0.21 26.9728);
   --primary-foreground: oklch(1 0 0);
   --secondary: oklch(0.968 0.211 109.7692);
   --secondary-foreground: oklch(0 0 0);
@@ -28,7 +28,7 @@ value: brutalist
   --chart-5: oklch(0.5931 0.2726 328.3634);
   --sidebar: oklch(0.9551 0 0);
   --sidebar-foreground: oklch(0 0 0);
-  --sidebar-primary: oklch(0.6489 0.237 26.9728);
+  --sidebar-primary: oklch(0.56 0.21 26.9728);
   --sidebar-primary-foreground: oklch(1 0 0);
   --sidebar-accent: oklch(0.5635 0.2408 260.8178);
   --sidebar-accent-foreground: oklch(1 0 0);

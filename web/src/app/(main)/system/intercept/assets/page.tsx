@@ -5,6 +5,7 @@ import * as React from "react";
 import { BanIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -45,10 +46,10 @@ function KindBadge({ kind }: { kind: AssetInterceptKind }) {
       variant="outline"
       className={
         cidr
-          ? "border-sky-400 text-sky-600"
+          ? "border-sky-400 text-sky-700 dark:text-sky-400"
           : fuzzy
-            ? "border-amber-400 text-amber-600"
-            : "border-emerald-400 text-emerald-600"
+            ? "border-amber-400 text-amber-700 dark:text-amber-400"
+            : "border-emerald-400 text-emerald-700 dark:text-emerald-400"
       }
     >
       {KIND_LABEL[kind]}
@@ -56,10 +57,10 @@ function KindBadge({ kind }: { kind: AssetInterceptKind }) {
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({ id, label, hint, children }: { id: string; label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</Label>
+      <Label htmlFor={id} className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</Label>
       {children}
       {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </div>
@@ -96,12 +97,18 @@ export default function AssetInterceptPage() {
   const [editing, setEditing] = React.useState<AssetInterceptRule | null>(null);
   const [form, setForm] = React.useState<RuleForm>(defaultForm());
   const [saving, setSaving] = React.useState(false);
+  const [loadError, setLoadError] = React.useState("");
+  const [formError, setFormError] = React.useState("");
+  const [toggling, setToggling] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<AssetInterceptRule | null>(null);
 
   const load = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
     try {
       setRules(await api.assetInterceptRules());
-    } catch {
-      toast.error("加载资产拦截规则失败");
+    } catch (e) {
+      setLoadError(`加载资产拦截规则失败：${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -116,20 +123,26 @@ export default function AssetInterceptPage() {
   }
 
   function openNew() {
+    setFormError("");
     setEditing(null);
     setForm(defaultForm());
     setOpen(true);
   }
 
   function openEdit(rule: AssetInterceptRule) {
+    setFormError("");
     setEditing(rule);
     setForm({ enabled: rule.enabled, kind: rule.kind, pattern: rule.pattern, note: rule.note });
     setOpen(true);
   }
 
   async function handleSave() {
+    if (saving) return;
+    setFormError("");
     const err = frontValidate(form);
     if (err) {
+      setFormError(err);
+      document.getElementById("asset-pattern")?.focus();
       toast.error(err);
       return;
     }
@@ -146,6 +159,7 @@ export default function AssetInterceptPage() {
       setOpen(false);
       load();
     } catch (e) {
+      setFormError((e as Error).message);
       toast.error((e as Error).message);
     } finally {
       setSaving(false);
@@ -153,29 +167,28 @@ export default function AssetInterceptPage() {
   }
 
   async function handleDelete(rule: AssetInterceptRule) {
-    if (!window.confirm(`确定删除资产拦截规则「${rule.pattern}」？`)) return;
-    try {
-      await api.deleteAssetInterceptRule(rule.id);
-      toast.success("规则已删除");
-      load();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+    await api.deleteAssetInterceptRule(rule.id);
+    toast.success("规则已删除");
+    await load();
   }
 
   async function handleToggle(rule: AssetInterceptRule) {
+    if (toggling) return;
+    setToggling(true);
     try {
       await api.toggleAssetInterceptRule(rule.id, !rule.enabled);
-      load();
+      await load();
     } catch (e) {
       toast.error((e as Error).message);
+    } finally {
+      setToggling(false);
     }
   }
 
   const placeholder = KIND_OPTIONS.find((o) => o.value === form.kind)?.placeholder ?? "";
 
   return (
-    <div className="flex flex-1 flex-col gap-5 p-6">
+    <div className="flex flex-1 flex-col gap-5 p-4 sm:p-6">
       {/* header */}
       <div className="flex items-center gap-2.5">
         <BanIcon className="h-5 w-5 shrink-0" />
@@ -198,11 +211,12 @@ export default function AssetInterceptPage() {
         </Button>
       </div>
 
+      {loadError && <div role="alert" className="rounded-md border border-destructive/50 p-3 text-sm text-destructive"><p>{loadError}</p><Button className="mt-2" variant="outline" onClick={load}>重试加载规则</Button></div>}
       <Card>
         <CardContent className="p-0">
           {loading ? (
             <p className="p-6 text-sm text-muted-foreground">加载中…</p>
-          ) : rules.length === 0 ? (
+          ) : loadError ? null : rules.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
               <BanIcon className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">暂无资产拦截规则</p>
@@ -219,12 +233,12 @@ export default function AssetInterceptPage() {
                   <TableHead>匹配内容</TableHead>
                   <TableHead>备注</TableHead>
                   <TableHead className="w-[64px] text-center">启用</TableHead>
-                  <TableHead className="w-[80px]" />
+                  <TableHead className="w-[80px]"><span className="sr-only">操作</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rules.map((rule) => (
-                  <TableRow key={rule.id} className={!rule.enabled ? "opacity-40" : ""}>
+                  <TableRow key={rule.id}>
                     <TableCell>
                       <KindBadge kind={rule.kind} />
                     </TableCell>
@@ -244,20 +258,21 @@ export default function AssetInterceptPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      <Switch checked={rule.enabled} onCheckedChange={() => handleToggle(rule)} />
+                      <Switch aria-label={`启用资产拦截规则 ${rule.pattern}`} disabled={toggling} checked={rule.enabled} onCheckedChange={() => handleToggle(rule)} />
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-0.5">
-                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(rule)}>
+                        <Button size="icon" variant="ghost" aria-label={`编辑资产拦截规则 ${rule.pattern}`} className="h-7 w-7" onClick={() => openEdit(rule)}>
                           <PencilIcon className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           size="icon"
                           variant="ghost"
                           className="h-7 w-7 text-destructive hover:text-destructive"
-                          onClick={() => handleDelete(rule)}
+                          aria-label={`删除资产拦截规则 ${rule.pattern}`}
+                          onClick={() => setDeleteTarget(rule)}
                         >
-                          <Trash2Icon className="h-3.5 w-3.5" />
+                          <Trash2Icon aria-hidden="true" className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </TableCell>
@@ -270,17 +285,25 @@ export default function AssetInterceptPage() {
       </Card>
 
       {/* editor sheet */}
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="right" className="flex flex-col gap-0 p-0 sm:max-w-md">
+      <ConfirmActionDialog
+        open={!!deleteTarget}
+        onOpenChange={(value) => { if (!value) setDeleteTarget(null); }}
+        title="删除资产拦截规则"
+        description={`将永久删除资产规则「${deleteTarget?.pattern ?? ""}」，命中目标将不再被全局拦截。此操作无法撤销。`}
+        confirmLabel="永久删除"
+        onConfirm={async () => { if (deleteTarget) await handleDelete(deleteTarget); }}
+      />
+      <Sheet open={open} onOpenChange={(value) => { if (!saving) setOpen(value); }}>
+        <SheetContent side="right" className="flex flex-col gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-md">
           <SheetHeader className="border-b px-6 py-4">
             <SheetTitle>{editing ? "编辑资产拦截规则" : "新建资产拦截规则"}</SheetTitle>
             <SheetDescription className="text-xs">命中此规则的目标资产会被全局拦截</SheetDescription>
           </SheetHeader>
 
-          <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-5">
-            <Field label="匹配类型">
+          <fieldset disabled={saving} className="flex-1 min-h-0 min-w-0 overflow-y-auto px-6 py-5 space-y-5">
+            <Field id="asset-kind" label="匹配类型">
               <Select value={form.kind} onValueChange={(v) => set({ kind: v as AssetInterceptKind })}>
-                <SelectTrigger>
+                <SelectTrigger id="asset-kind">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -301,6 +324,7 @@ export default function AssetInterceptPage() {
             </Field>
 
             <Field
+              id="asset-pattern"
               label="匹配内容"
               hint={
                 form.kind === "cidr"
@@ -311,14 +335,18 @@ export default function AssetInterceptPage() {
               }
             >
               <Input
+                id="asset-pattern"
+                aria-describedby={formError ? "asset-form-error" : undefined}
+                aria-invalid={!!formError}
                 placeholder={placeholder}
                 value={form.pattern}
                 onChange={(e) => set({ pattern: e.target.value })}
               />
             </Field>
 
-            <Field label="备注（可选）">
+            <Field id="asset-note" label="备注（可选）">
               <Textarea
+                id="asset-note"
                 placeholder="说明这条规则的用途"
                 value={form.note}
                 onChange={(e) => set({ note: e.target.value })}
@@ -335,10 +363,11 @@ export default function AssetInterceptPage() {
                 启用此规则
               </Label>
             </div>
-          </div>
+            {formError && <p id="asset-form-error" role="alert" className="text-sm text-destructive">{formError}</p>}
+          </fieldset>
 
           <SheetFooter className="border-t px-6 py-4 flex-row justify-end gap-2">
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>
               取消
             </Button>
             <Button onClick={handleSave} disabled={saving}>

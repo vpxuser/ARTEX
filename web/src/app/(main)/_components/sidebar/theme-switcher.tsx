@@ -21,7 +21,13 @@ export function ThemeSwitcher() {
   };
 
   return (
-    <Button size="icon" onClick={cycleTheme} aria-label={`Current theme: ${themeMode}. Click to cycle themes`}>
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      onClick={cycleTheme}
+      aria-label={`切换主题，当前为${{ light: "浅色", dark: "深色", system: "跟随系统" }[themeMode]}`}
+      title="切换浅色、深色或跟随系统主题"
+    >
       {/* SYSTEM */}
       <Monitor className="hidden [html[data-theme-mode=system]_&]:block" />
 

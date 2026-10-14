@@ -266,14 +266,16 @@ export function RetryPolicyPanel() {
   const [policy, setPolicy] = React.useState<LLMRetryPolicy>(ZERO_POLICY);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [loadError, setLoadError] = React.useState("");
 
   const load = React.useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     try {
       const p = await api.llmRetryPolicy();
       setPolicy({ ...ZERO_POLICY, ...p });
     } catch (e) {
-      toast.error(`读取重试策略失败：${(e as Error).message}`);
+      setLoadError(`读取重试策略失败：${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -307,6 +309,8 @@ export function RetryPolicyPanel() {
       </div>
     );
   }
+
+  if (loadError) return <div role="alert" className="grid gap-3 rounded-lg border p-4 text-sm"><p>{loadError}</p><Button variant="outline" onClick={() => void load()}>重试</Button></div>;
 
   return (
     <div className="grid gap-4">

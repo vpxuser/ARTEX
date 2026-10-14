@@ -55,13 +55,15 @@ export default function AssetSyncPage() {
 function ScopeSentryPanel() {
   const [status, setStatus] = React.useState<SSStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = React.useState(true);
+  const [statusError, setStatusError] = React.useState("");
 
   const loadStatus = React.useCallback(() => {
     setLoadingStatus(true);
+    setStatusError("");
     api
       .ssStatus()
       .then(setStatus)
-      .catch((e) => toast.error(`读取数据源状态失败：${e.message}`))
+      .catch((e) => setStatusError(`读取数据源状态失败：${e.message}`))
       .finally(() => setLoadingStatus(false));
   }, []);
 
@@ -73,6 +75,7 @@ function ScopeSentryPanel() {
 
   return (
     <div className="space-y-4">
+      {statusError && <div role="alert" className="flex items-center gap-2 text-sm text-destructive"><span>{statusError}</span><Button variant="outline" size="sm" onClick={loadStatus}>重试</Button></div>}
       <DataSourceCard status={status} loading={loadingStatus} onChanged={loadStatus} />
       {ready ? (
         <SyncWorkbench />
@@ -146,7 +149,7 @@ function DataSourceCard({
         </Button>
       </CardHeader>
       <CardContent className="space-y-3">
-        {!status?.exists ? (
+        {!status ? <p role="status" className="text-sm text-muted-foreground">{loading ? "正在读取数据源状态…" : "暂时无法读取数据源状态，请重试"}</p> : !status.exists ? (
           <div className="flex items-center justify-between gap-4">
             <p className="text-muted-foreground text-sm">
               尚未创建 ScopeSentry 数据源。创建后会新增一个占位 MCP（地址/密钥为空、未启用）。
@@ -158,23 +161,23 @@ function DataSourceCard({
         ) : (
           <>
             {!status.configured && (
-              <p className="text-amber-600 text-sm dark:text-amber-500">
+              <p className="text-amber-800 text-sm dark:text-amber-500">
                 数据源已创建但未配置，请填写 MCP 地址与 API Key 后启用。
               </p>
             )}
             {status.configured && !status.enabled && (
-              <p className="text-amber-600 text-sm dark:text-amber-500">数据源已配置但未启用，保存后将自动启用。</p>
+              <p className="text-amber-800 text-sm dark:text-amber-500">数据源已配置但未启用，保存后将自动启用。</p>
             )}
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>MCP 地址</Label>
-                <Input placeholder="http://<主机>:8082/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
+                <Label htmlFor="sync-mcp-url">MCP 地址</Label>
+                <Input id="sync-mcp-url" placeholder="http://<主机>:8082/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label>API Key（X-API-Key，留空保留原值）</Label>
+                <Label htmlFor="sync-api-key">API Key（X-API-Key，留空保留原值）</Label>
                 <Input
                   type="password"
-                  placeholder="ssk_..."
+                  id="sync-api-key" placeholder="ssk_..."
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                 />
@@ -467,7 +470,7 @@ function SyncResult({ result }: { result: Awaited<ReturnType<typeof api.ssSync>>
         <p className="text-muted-foreground">新建/更新企业：{result.companies.join("、")}</p>
       )}
       {result.warnings && result.warnings.length > 0 && (
-        <ul className="list-inside list-disc text-amber-600 dark:text-amber-500">
+        <ul className="list-inside list-disc text-amber-800 dark:text-amber-500">
           {result.warnings.map((wm) => (
             <li key={wm}>{wm}</li>
           ))}

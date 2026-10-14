@@ -32,10 +32,19 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSessionDrafts } from "@/hooks/use-session-drafts";
 import { api } from "@/lib/api";
 import type { LLMProfile, Task } from "@/lib/types";
 
@@ -203,12 +212,14 @@ function TaskLLMControl({ task, profiles, onUpdated }: { task: Task; profiles: L
 }
 
 function TaskDetailInner() {
+  const taskSessionDrafts = useSessionDrafts();
   const router = useRouter();
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   const [task, setTask] = React.useState<Task | null>(null);
   const [paused, setPaused] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
+  const [loadError, setLoadError] = React.useState("");
   const [tab, setTab] = React.useState("sessions");
   const [interceptPendingCount, setInterceptPendingCount] = React.useState(0);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
@@ -257,10 +268,11 @@ function TaskDetailInner() {
           base.paused = at.paused;
         }
         setTask(base);
+        setLoadError("");
         setPaused(at?.paused ?? base.paused ?? false);
       })
-      .catch(() => {
-        // Keep the last rendered task state during a transient poll failure.
+      .catch((error) => {
+        if (taskLoadInFlight.current === id) setLoadError((error as Error).message || "请求失败");
       })
       .finally(() => {
         if (taskLoadInFlight.current === id) {
@@ -303,10 +315,18 @@ function TaskDetailInner() {
   if (!task) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center">
-        <p className="text-muted-foreground">{loaded ? `任务 ${id} 已被删除、归档或不存在` : "加载中…"}</p>
+        <h1 className="text-lg font-semibold">任务详情</h1>
+        <p role={loadError ? "alert" : "status"} className="text-muted-foreground">
+          {loadError ? `任务加载失败：${loadError}` : loaded ? `任务 ${id} 已被删除、归档或不存在` : "加载中…"}
+        </p>
+        {loadError && (
+          <Button variant="outline" onClick={load}>
+            重试
+          </Button>
+        )}
         {loaded && (
           <Button asChild variant="outline">
-            <Link href="/function/tasks">
+            <Link href="/function/tasks" aria-label="返回任务列表">
               <ArrowLeftIcon /> 返回任务列表
             </Link>
           </Button>
@@ -348,13 +368,22 @@ function TaskDetailInner() {
   );
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col gap-0">
-      {/* Top fixed area */}
-      <header className="sticky top-0 z-10 flex flex-col gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:px-6">
+    <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden">
+      {loadError && (
+        <div role="alert" className="flex items-center gap-2 border-b p-3 text-sm text-destructive">
+          任务刷新失败：{loadError}（保留上次数据）
+          <Button size="sm" variant="outline" onClick={load}>
+            重试
+          </Button>
+        </div>
+      )}
+      <section
+        aria-label="任务信息与操作"
+        className="flex shrink-0 flex-col gap-2 border-b bg-background px-4 py-2.5 lg:px-6"
+      >
         <div className="flex items-center gap-2">
-          <SidebarTrigger className="-ml-1" />
           <Button asChild variant="ghost" size="icon" className="size-7">
-            <Link href="/function/tasks">
+            <Link href="/function/tasks" aria-label="返回任务列表">
               <ArrowLeftIcon />
             </Link>
           </Button>
@@ -399,13 +428,41 @@ function TaskDetailInner() {
         </div>
         <p className="truncate text-xs text-muted-foreground">{task.goal}</p>
         {/* Tabs */}
-        <div className="no-scrollbar min-w-0 overflow-x-auto">
-          <TabsList variant="default" className="min-w-max">
+        <div className="flex items-center gap-3 sm:hidden">
+          <span id="task-view-label" className="shrink-0 text-xs text-muted-foreground">
+            任务视图
+          </span>
+          <Select value={tab} onValueChange={setTab}>
+            <SelectTrigger aria-labelledby="task-view-label" className="min-w-0 flex-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[
+                { label: "执行过程", values: ["sessions", "overview", "graph", "broadcast"] },
+                { label: "发现与报告", values: ["findings", "retests", "report"] },
+                { label: "资产", values: ["assets", "coverage"] },
+                { label: "安全审批", values: ["intercept"] },
+              ].map((group) => (
+                <SelectGroup key={group.label}>
+                  <SelectLabel>{group.label}</SelectLabel>
+                  {group.values.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {TABS.find((item) => item.value === value)?.label}
+                      {value === "intercept" && interceptPendingCount > 0 ? `（${interceptPendingCount} 待处理）` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="hidden min-w-0 sm:block">
+          <TabsList variant="default" className="h-auto! min-h-9 w-full flex-wrap justify-start gap-1">
             {TABS.map((t) => (
-              <TabsTrigger key={t.value} value={t.value}>
+              <TabsTrigger key={t.value} value={t.value} className="h-8! flex-none px-2.5">
                 {t.label}
                 {t.value === "intercept" && interceptPendingCount > 0 && (
-                  <span className="ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white">
+                  <span className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-100 px-1 text-xs font-semibold leading-none text-amber-900 dark:bg-amber-950 dark:text-amber-200">
                     {interceptPendingCount > 99 ? "99+" : interceptPendingCount}
                   </span>
                 )}
@@ -413,12 +470,12 @@ function TaskDetailInner() {
             ))}
           </TabsList>
         </div>
-      </header>
+      </section>
 
-      {/* Tab content */}
-      <div className="flex-1 p-4 lg:p-6">
-        <TabsContent value="sessions" className="mt-0">
-          <SessionsTab taskId={id} />
+      {/* Session panes fill the available height; other tabs scroll inside this area. */}
+      <div className={`min-h-0 flex-1 overflow-auto ${tab === "sessions" ? "p-3 sm:p-4 xl:p-6" : "p-4 lg:p-6"}`}>
+        <TabsContent value="sessions" className="mt-0 h-full min-h-0">
+          <SessionsTab taskId={id} draftStore={taskSessionDrafts} onOpenApprovals={() => setTab("intercept")} />
         </TabsContent>
         <TabsContent value="overview" className="mt-0">
           <OverviewTab taskId={id} />

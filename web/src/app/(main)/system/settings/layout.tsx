@@ -1,0 +1,8 @@
+import type { ReactNode } from "react";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = { title: "系统配置 · ARTEX" };
+
+export default function PageLayout({ children }: { children: ReactNode }) {
+  return children;
+}

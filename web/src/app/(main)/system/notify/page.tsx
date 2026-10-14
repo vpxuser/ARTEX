@@ -424,7 +424,7 @@ export default function NotifyPage() {
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label>渠道类型</Label>
+                <Label htmlFor="notify-kind">渠道类型</Label>
                 <Select
                   value={form.kind}
                   onValueChange={(v) => {
@@ -433,7 +433,7 @@ export default function NotifyPage() {
                   }}
                   disabled={!!editing}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="notify-kind">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -478,9 +478,9 @@ export default function NotifyPage() {
               )}
 
               <div className="grid gap-2">
-                <Label>推送时机</Label>
+                <Label htmlFor="notify-mode">推送时机</Label>
                 <Select value={form.mode} onValueChange={(v) => setF({ mode: v as "realtime" | "digest" })}>
-                  <SelectTrigger>
+                  <SelectTrigger id="notify-mode">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -512,12 +512,12 @@ export default function NotifyPage() {
                 <p className="mb-3 text-sm font-medium">过滤规则（留空即不过滤）</p>
                 <div className="grid gap-4">
                   <div className="grid gap-2">
-                    <Label>最低级别</Label>
+                    <Label htmlFor="notify-severity">最低级别</Label>
                     <Select
                       value={form.minSeverity || "all"}
                       onValueChange={(v) => setF({ minSeverity: v === "all" ? "" : v })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger id="notify-severity">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

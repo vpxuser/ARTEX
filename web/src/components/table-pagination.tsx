@@ -53,7 +53,7 @@ export function TablePagination({
     <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 lg:px-6">
       <div className="text-muted-foreground flex items-center gap-2 text-xs">
         <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
-          <SelectTrigger size="sm" className="h-7 w-16">
+          <SelectTrigger aria-label="每页条数" size="sm" className="h-7 w-16">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

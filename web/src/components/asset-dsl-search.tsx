@@ -255,9 +255,9 @@ function applyDslSuggestion(text: string, s: DslSuggestion): { text: string; cur
 }
 
 const KIND_STYLE: Record<string, string> = {
-  field: "text-blue-500 dark:text-blue-400",
-  operator: "text-amber-500 dark:text-amber-400",
-  logic: "text-emerald-500 dark:text-emerald-400",
+  field: "text-blue-700 dark:text-blue-300",
+  operator: "text-amber-800 dark:text-amber-300",
+  logic: "text-emerald-700 dark:text-emerald-300",
 };
 
 // AssetDslSearch is the shared DSL search box: a monospace input with a
@@ -340,6 +340,7 @@ export function AssetDslSearch({
       <div className="relative max-w-lg">
         <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
+          aria-label="搜索资产，可输入关键词或 DSL 条件"
           ref={inputRef}
           placeholder="DSL 搜索：domain=example AND status_code>=400"
           value={query}
@@ -351,30 +352,44 @@ export function AssetDslSearch({
           className="h-8 pl-8 font-mono text-xs"
         />
         {open && suggestions.length > 0 && (
-          <div className="absolute top-full left-0 z-50 mt-1 w-max min-w-full max-w-sm rounded-md border bg-popover py-1 shadow-md">
+          <div className="absolute top-full left-0 z-50 mt-1 w-full max-w-full rounded-md border bg-popover py-1 shadow-md">
             {suggestions.map((s, i) => (
               <button
                 type="button"
                 key={i}
                 className={cn(
                   "flex w-full cursor-pointer items-center gap-3 px-3 py-1.5 text-left",
-                  i === selIdx ? "bg-accent" : "hover:bg-accent/50",
+                  i === selIdx ? "bg-accent text-accent-foreground" : "hover:bg-muted",
                 )}
                 onMouseEnter={() => setSelIdx(i)}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  apply(s);
                 }}
+                onClick={() => apply(s)}
               >
-                <span className={cn("shrink-0 font-mono text-xs font-semibold", KIND_STYLE[s.kind])}>{s.label}</span>
-                <span className="text-xs text-muted-foreground">{s.desc}</span>
+                <span
+                  className={cn(
+                    "max-w-1/2 shrink-0 break-all font-mono text-xs font-semibold",
+                    i === selIdx ? "text-accent-foreground" : KIND_STYLE[s.kind],
+                  )}
+                >
+                  {s.label}
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 break-words text-xs",
+                    i === selIdx ? "text-accent-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {s.desc}
+                </span>
               </button>
             ))}
           </div>
         )}
       </div>
       {query.trim() && !open && (
-        <p className="pl-1 text-[11px] text-muted-foreground">
+        <p className="pl-1 text-xs text-muted-foreground">
           {loading ? "搜索中…" : error ? <span className="text-destructive">{error}</span> : `找到 ${count ?? 0} 条`}
         </p>
       )}

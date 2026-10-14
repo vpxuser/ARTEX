@@ -60,21 +60,30 @@ function FindingDetailInner() {
   const contextTaskId = searchParams.get("context_task") ?? "";
   const [finding, setFinding] = React.useState<Finding | null>(null);
   const [loaded, setLoaded] = React.useState(false);
+  const [loadError, setLoadError] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const loadRequest = React.useRef(0);
   const [tab, setTab] = React.useState("overview");
 
   const load = React.useCallback(() => {
+    const request = ++loadRequest.current;
     if (!id) {
       setLoaded(true);
       return;
     }
+    setLoading(true);
     api
       .getFinding(id, contextTaskId || undefined)
-      .then((f) => setFinding(f))
-      .catch(() => setFinding(null))
-      .finally(() => setLoaded(true));
+      .then((f) => { if (request === loadRequest.current) { setFinding(f); setLoadError(""); } })
+      .catch((error) => { if (request === loadRequest.current) setLoadError((error as Error).message || "请求失败"); })
+      .finally(() => { if (request === loadRequest.current) { setLoaded(true); setLoading(false); } });
   }, [contextTaskId, id]);
   React.useEffect(() => {
+    setFinding(null);
+    setLoaded(false);
+    setLoadError("");
     load();
+    return () => { loadRequest.current += 1; };
   }, [load]);
 
   const changeSeverity = React.useCallback(
@@ -114,10 +123,12 @@ function FindingDetailInner() {
   if (!finding) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center">
-        <p className="text-muted-foreground">{loaded ? `未找到发现 ${id}` : "加载中…"}</p>
+        <h1 className="text-lg font-semibold">发现详情</h1>
+        <p role={loadError ? "alert" : "status"} className="text-muted-foreground">{loadError ? `发现加载失败：${loadError}` : loaded ? `未找到发现 ${id}` : "加载中…"}</p>
+        {loadError && <Button variant="outline" onClick={load} disabled={loading}>重试</Button>}
         {loaded && (
           <Button asChild variant="outline">
-            <Link href="/function/findings">
+            <Link href="/function/findings" aria-label="返回发现列表">
               <ArrowLeftIcon /> 返回发现列表
             </Link>
           </Button>
@@ -130,12 +141,13 @@ function FindingDetailInner() {
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col gap-0">
+      {loadError && <div role="alert" className="flex items-center gap-2 border-b p-3 text-sm text-destructive">发现刷新失败：{loadError}（保留上次数据）<Button size="sm" variant="outline" disabled={loading} onClick={load}>重试</Button></div>}
       {/* Sticky header */}
       <header className="sticky top-0 z-10 flex flex-col gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:px-6">
         <div className="flex flex-wrap items-center gap-2">
           <SidebarTrigger className="-ml-1" />
           <Button asChild variant="ghost" size="icon" className="size-7">
-            <Link href="/function/findings">
+            <Link href="/function/findings" aria-label="返回发现列表">
               <ArrowLeftIcon />
             </Link>
           </Button>
@@ -172,7 +184,7 @@ function FindingDetailInner() {
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">{finding.summary || "（无摘要）"}</p>
                 </CardContent>
               </Card>
-              <FindingRetestPanel key={id} findingId={id} readOnly={finding.inherited} onCompleted={load} />
+              <FindingRetestPanel key={`retest:${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>
@@ -188,7 +200,7 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               <FindingTrafficPanel
-                key={id}
+                key={`traffic:${id}`}
                 findingId={id}
                 contextTask={contextTaskId || undefined}
                 readOnly={finding.inherited}
@@ -234,7 +246,7 @@ function FindingDetailInner() {
                     <StatusBadge domain="severity" value={finding.severity} dot />
                   ) : (
                     <Select value={finding.severity} onValueChange={(v) => changeSeverity(v as Severity)}>
-                      <SelectTrigger size="sm" className="h-7 w-auto border-none px-1 shadow-none focus-visible:ring-0">
+                      <SelectTrigger aria-label="严重等级" size="sm" className="h-7 w-auto border-none px-1 shadow-none focus-visible:ring-0">
                         <StatusBadge domain="severity" value={finding.severity} dot />
                       </SelectTrigger>
                       <SelectContent position="popper" align="end">
@@ -256,7 +268,7 @@ function FindingDetailInner() {
                     <StatusBadge domain="finding" value={finding.status} dot />
                   ) : (
                     <Select value={finding.status} onValueChange={(v) => changeStatus(v as FindingStatus)}>
-                      <SelectTrigger size="sm" className="h-7 w-auto border-none px-1 shadow-none focus-visible:ring-0">
+                      <SelectTrigger aria-label="处理状态" size="sm" className="h-7 w-auto border-none px-1 shadow-none focus-visible:ring-0">
                         <StatusBadge domain="finding" value={finding.status} dot />
                       </SelectTrigger>
                       <SelectContent position="popper" align="end">

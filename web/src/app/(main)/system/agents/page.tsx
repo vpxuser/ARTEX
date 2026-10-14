@@ -98,7 +98,8 @@ function AgentGridCard({
             <Button
               variant="ghost"
               size="icon-sm"
-              className="text-muted-foreground hover:text-destructive absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100"
+              aria-label={`删除 Agent ${agent.name}`}
+              className="text-muted-foreground hover:text-destructive absolute top-2 right-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
             >
               <Trash2Icon className="size-3.5" />
             </Button>
@@ -209,9 +210,13 @@ function CreateAgentDialog({ onCreated }: { onCreated: (key: string) => void }) 
 export default function AgentsPage() {
   const [agents, setAgents] = React.useState<Agent[]>([]);
   const [editKey, setEditKey] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
 
   const reload = React.useCallback(() => {
-    api.agents().then(setAgents).catch(() => setAgents([]));
+    setLoading(true);
+    setLoadError("");
+    api.agents().then(setAgents).catch((e) => setLoadError(`读取 Agent 失败：${(e as Error).message}`)).finally(() => setLoading(false));
   }, []);
   React.useEffect(() => {
     reload();
@@ -221,7 +226,7 @@ export default function AgentsPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Agent</h1>
           <p className="text-muted-foreground text-sm">
@@ -242,7 +247,7 @@ export default function AgentsPage() {
           <CardDescription>共 {agents.length} 个</CardDescription>
         </CardHeader>
         <CardContent>
-          {agents.length === 0 ? (
+          {loadError ? <div role="alert" className="grid gap-3 text-sm"><p>{loadError}</p><Button variant="outline" onClick={reload}>重试</Button></div> : loading ? <p role="status" className="text-sm text-muted-foreground">正在读取 Agent…</p> : agents.length === 0 ? (
             <p className="text-muted-foreground py-6 text-center text-sm">（暂无 Agent）</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -257,7 +262,7 @@ export default function AgentsPage() {
       <Sheet open={!!editing} onOpenChange={(o) => !o && setEditKey(null)}>
         <SheetContent
           side="right"
-          className="flex flex-col gap-0 p-0 data-[side=right]:w-[45vw] data-[side=right]:sm:max-w-[45vw]"
+          className="flex flex-col gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
         >
           {editing && (
             <>

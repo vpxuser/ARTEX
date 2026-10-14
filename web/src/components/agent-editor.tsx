@@ -43,6 +43,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
   const [skills, setSkills] = React.useState<SkillItem[]>([]);
   const [tools, setTools] = React.useState<Tool[]>([]);
   const [loaded, setLoaded] = React.useState(false);
+  const [loadError, setLoadError] = React.useState("");
   const [viewVer, setViewVer] = React.useState<PromptVersion | null>(null);
   const [diffVer, setDiffVer] = React.useState<PromptVersion | null>(null);
 
@@ -68,18 +69,30 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
   const [ttTurns, setTtTurns] = React.useState("0");
   const [ttTurnsDefault, setTtTurnsDefault] = React.useState(5);
   const [settings, setSettings] = React.useState<Settings | null>(null);
+  const [resourcesReady, setResourcesReady] = React.useState(false);
+  const [resourceError, setResourceError] = React.useState("");
 
-  React.useEffect(() => {
-    api.mcpServers().then(setMcp).catch(() => {});
-    api.skills().then(setSkills).catch(() => {});
-    api.tools().then(setTools).catch(() => {});
-    api.settings().then(setSettings).catch(() => {});
+  const loadResources = React.useCallback(async () => {
+    setResourceError("");
+    try {
+      const [servers, nextSkills, nextTools, config] = await Promise.all([api.mcpServers(), api.skills(), api.tools(), api.settings()]);
+      setMcp(servers);
+      setSkills(nextSkills);
+      setTools(nextTools);
+      setSettings(config);
+      setResourcesReady(true);
+    } catch (e) {
+      setResourceError(`读取 Agent 可用资源失败：${(e as Error).message}`);
+    }
   }, []);
+  React.useEffect(() => { void loadResources(); }, [loadResources]);
   // global gates: traffic tools need 流量捕获, web search needs the master switch.
   const captureOn = !!settings?.traffic_capture;
   const webSearchGlobalOn = !!settings?.web_search_enabled;
 
   const reload = React.useCallback(() => {
+    setLoaded(false);
+    setLoadError("");
     api
       .getAgent(agentKey)
       .then((d) => {
@@ -105,7 +118,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         setTtTurns(String(d.task_timeout_wrapup_max_turns ?? 0));
         setTtTurnsDefault(d.task_timeout_wrapup_max_turns_default ?? 5);
       })
-      .catch(() => setDetail(null))
+      .catch((e) => setLoadError(`读取 Agent 失败：${(e as Error).message}`))
       .finally(() => setLoaded(true));
   }, [agentKey]);
   React.useEffect(() => {
@@ -251,7 +264,12 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
     }
   }
 
-  if (loaded && !detail) {
+  if (loadError) {
+    return <div role="alert" className="grid gap-3 p-6 text-sm"><p>{loadError}</p><Button variant="outline" onClick={reload}>重试</Button></div>;
+  }
+  if (resourceError) return <div role="alert" className="grid gap-3 p-6 text-sm"><p>{resourceError}</p><Button variant="outline" onClick={() => void loadResources()}>重试</Button></div>;
+  if (!loaded || !resourcesReady) return <p role="status" className="p-6 text-muted-foreground text-sm">正在读取 Agent…</p>;
+  if (!detail) {
     return <div className="text-muted-foreground p-6 text-center text-sm">未找到 Agent：{agentKey}</div>;
   }
   // config is meaningless for the conversational main agent and the fixed-budget
@@ -269,7 +287,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
 
   return (
     <Tabs defaultValue="prompt" className="flex min-h-0 flex-1 flex-col">
-      <TabsList className="mx-4 mt-2 w-fit">
+      <TabsList className="mx-4 mt-2 h-auto w-auto flex-wrap justify-start">
         <TabsTrigger value="prompt">配置与提示词</TabsTrigger>
         <TabsTrigger value="wrapup">收尾提示词</TabsTrigger>
         <TabsTrigger value="mcp">MCP</TabsTrigger>
@@ -288,7 +306,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                   <Label htmlFor="llm-profile" className="text-xs">默认模型（LLM 配置）</Label>
                   <div className="flex flex-wrap items-center gap-3">
                     <Select value={llmProfileId || "__follow__"} onValueChange={(v) => setLlmProfileId(v === "__follow__" ? "" : v)}>
-                      <SelectTrigger id="llm-profile" className="h-8 w-72">
+                      <SelectTrigger id="llm-profile" className="h-8 w-full sm:w-72">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -383,7 +401,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
             </div>
           </div>
 
-          <Textarea className="font-mono text-xs" rows={16} value={prompt}
+          <Textarea aria-label="Agent 提示词" className="font-mono text-xs" rows={16} value={prompt}
             placeholder="留空则使用内置默认提示词" onChange={(e) => setPrompt(e.target.value)} />
 
           <div className="flex flex-wrap gap-2">
@@ -426,11 +444,11 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                       {new Date(ver.ts).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
                     </span>
                   )}
-                  <Button variant="ghost" size="icon-sm" className="size-6 shrink-0" onClick={() => setViewVer(ver)}>
+                  <Button variant="ghost" size="icon-sm" className="size-6 shrink-0" aria-label={`查看提示词版本 v${ver.version}`} onClick={() => setViewVer(ver)}>
                     <EyeIcon className="size-3" />
                   </Button>
                   {i > 0 && versions[0] && (
-                    <Button variant="ghost" size="icon-sm" className="size-6 shrink-0" onClick={() => setDiffVer(ver)}>
+                    <Button variant="ghost" size="icon-sm" className="size-6 shrink-0" aria-label={`比较提示词版本 v${ver.version}`} onClick={() => setDiffVer(ver)}>
                       <GitCompareIcon className="size-3" />
                     </Button>
                   )}
@@ -515,6 +533,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
             )}
           </div>
           <Textarea
+            aria-label="收尾提示词正文"
             className="font-mono text-xs"
             rows={10}
             value={wrapup}
@@ -560,6 +579,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                 )}
               </div>
               <Textarea
+                aria-label="任务超时收尾提示词正文"
                 className="font-mono text-xs"
                 rows={10}
                 value={ttWrapup}
@@ -595,11 +615,11 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         <p className="text-muted-foreground mb-3 text-xs">勾选此 Agent 可见的 MCP 服务器。</p>
         <div className="grid gap-2">
           {mcp.map((m) => (
-            <label key={m.id} className="flex items-center gap-2 rounded-md border p-2 text-sm">
+            <Label key={m.id} className="flex items-center gap-2 rounded-md border p-2 text-sm">
               <Checkbox checked={mcpVisible.includes(m.id)} onCheckedChange={() => toggleMcp(m.id)} />
               {m.name}
               <span className="text-muted-foreground ml-auto text-xs">{m.transport}</span>
-            </label>
+            </Label>
           ))}
           {mcp.length === 0 && <span className="text-muted-foreground text-xs">（暂无 MCP）</span>}
         </div>
@@ -610,11 +630,11 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         <p className="text-muted-foreground mb-3 text-xs">勾选此 Agent 可见的 Skill。</p>
         <div className="grid gap-2">
           {skills.map((s) => (
-            <label key={s.name} className="flex items-center gap-2 rounded-md border p-2 text-sm">
+            <Label key={s.name} className="flex items-center gap-2 rounded-md border p-2 text-sm">
               <Checkbox checked={skillVisible.includes(s.name)} onCheckedChange={() => toggleSkill(s.name)} />
               <span className="font-mono text-xs">{s.name}</span>
               {s.description && <span className="text-muted-foreground ml-auto truncate text-xs">{s.description}</span>}
-            </label>
+            </Label>
           ))}
           {skills.length === 0 && <span className="text-muted-foreground text-xs">（暂无 Skill）</span>}
         </div>
@@ -628,7 +648,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
             const isTraffic = TRAFFIC_TOOL_KEYS.has(t.key);
             const gated = isTraffic && !captureOn; // traffic tools need 流量捕获 on
             return (
-              <label
+              <Label
                 key={t.key}
                 className={cn(
                   "flex items-center gap-2 rounded-md border p-2 text-sm",
@@ -656,7 +676,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                     </span>
                   )
                 )}
-              </label>
+              </Label>
             );
           })}
           {tools.length === 0 && <span className="text-muted-foreground text-xs">（暂无工具）</span>}
@@ -733,6 +753,8 @@ function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
 function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent }) {
   const [triggers, setTriggers] = React.useState<AgentTrigger[]>([]);
   const [tools, setTools] = React.useState<Tool[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
   // 触发后处理策略(每 agent);初值来自 agent detail,改动即保存。
   const [runMode, setRunMode] = React.useState<"serial" | "parallel">(agent?.trigger_run_mode ?? "serial");
   const [mergeMode, setMergeMode] = React.useState<"by_task" | "all" | "none">(agent?.trigger_merge_mode ?? "all");
@@ -772,15 +794,22 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
   // null = 新增模式；非 null = 正在编辑该 id 的触发器。
   const [editingId, setEditingId] = React.useState<number | null>(null);
 
-  const reload = React.useCallback(() => {
-    api.agentTriggers(agentKey).then(setTriggers).catch(() => setTriggers([]));
+  const reload = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const [nextTriggers, nextTools] = await Promise.all([api.agentTriggers(agentKey), api.tools()]);
+      setTriggers(nextTriggers);
+      setTools(nextTools);
+    } catch (e) {
+      setLoadError(`读取触发器失败：${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
   }, [agentKey]);
   React.useEffect(() => {
     reload();
   }, [reload]);
-  React.useEffect(() => {
-    api.tools().then(setTools).catch(() => setTools([]));
-  }, []);
 
   function toggleTool(key: string) {
     setToolNames((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
@@ -912,6 +941,9 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
     return parts.join(" · ") || "（无条件）";
   }
 
+  if (loading) return <p role="status" className="text-sm text-muted-foreground">正在读取触发器…</p>;
+  if (loadError) return <div role="alert" className="grid gap-3 text-sm"><p>{loadError}</p><Button variant="outline" onClick={() => void reload()}>重试</Button></div>;
+
   return (
     <div className="grid gap-4">
       <p className="text-muted-foreground text-xs">
@@ -933,7 +965,7 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
                 saveBehavior({ trigger_run_mode: rm });
               }}
             >
-              <SelectTrigger size="sm" className="h-8 w-40">
+              <SelectTrigger aria-label="触发器运行模式" size="sm" className="h-8 w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper">
@@ -954,7 +986,7 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
                 saveBehavior({ trigger_merge_mode: mm });
               }}
             >
-              <SelectTrigger size="sm" className="h-8 w-44">
+              <SelectTrigger aria-label="触发器合并模式" size="sm" className="h-8 w-44">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper">
@@ -1005,9 +1037,9 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
 
         {/* 定时 */}
         <div className="grid gap-1.5">
-          <label className="flex items-center gap-2 text-sm">
+          <Label className="flex items-center gap-2 text-sm">
             <Checkbox checked={onInterval} onCheckedChange={(v) => setOnInterval(!!v)} /> 定时触发
-          </label>
+          </Label>
           {onInterval && (
             <div className="grid gap-1.5">
               <div className="flex items-center gap-2">
@@ -1016,7 +1048,7 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
                   value={intervalSec} onChange={(e) => setIntervalSec(e.target.value)} />
                 <span className="text-muted-foreground text-xs">秒</span>
               </div>
-              <Textarea className="text-xs" rows={2} value={intervalMsg}
+              <Textarea aria-label="定时触发消息" className="text-xs" rows={2} value={intervalMsg}
                 placeholder="定时触发时发给 agent 的话，如：巡检所有任务" onChange={(e) => setIntervalMsg(e.target.value)} />
             </div>
           )}
@@ -1024,42 +1056,42 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
 
         {/* finding */}
         <div className="grid gap-1.5">
-          <label className="flex items-center gap-2 text-sm">
+          <Label className="flex items-center gap-2 text-sm">
             <Checkbox checked={onFinding} onCheckedChange={(v) => setOnFinding(!!v)} /> 发现 finding 时触发
-          </label>
+          </Label>
           {onFinding && (
-            <Textarea className="text-xs" rows={2} value={findingMsg}
+            <Textarea aria-label="发现触发消息" className="text-xs" rows={2} value={findingMsg}
               placeholder="发现 finding 时发给 agent 的话（系统会附带任务与 finding 详情）" onChange={(e) => setFindingMsg(e.target.value)} />
           )}
         </div>
 
         {/* 目标达成 */}
         <div className="grid gap-1.5">
-          <label className="flex items-center gap-2 text-sm">
+          <Label className="flex items-center gap-2 text-sm">
             <Checkbox checked={onGoalMet} onCheckedChange={(v) => setOnGoalMet(!!v)} /> 目标达成时触发
-          </label>
+          </Label>
           {onGoalMet && (
-            <Textarea className="text-xs" rows={2} value={goalMsg}
+            <Textarea aria-label="目标达成触发消息" className="text-xs" rows={2} value={goalMsg}
               placeholder="目标达成时发给 agent 的话（系统会附带任务与达成的目标）" onChange={(e) => setGoalMsg(e.target.value)} />
           )}
         </div>
 
         {/* 任务超时 */}
         <div className="grid gap-1.5">
-          <label className="flex items-center gap-2 text-sm">
+          <Label className="flex items-center gap-2 text-sm">
             <Checkbox checked={onTaskTimeout} onCheckedChange={(v) => setOnTaskTimeout(!!v)} /> 任务超时时触发
-          </label>
+          </Label>
           {onTaskTimeout && (
-            <Textarea className="text-xs" rows={2} value={taskTimeoutMsg}
+            <Textarea aria-label="任务超时触发消息" className="text-xs" rows={2} value={taskTimeoutMsg}
               placeholder="任务超时时发给 agent 的话（系统会附带任务编号与目标）" onChange={(e) => setTaskTimeoutMsg(e.target.value)} />
           )}
         </div>
 
         {/* 工具调用 */}
         <div className="grid gap-1.5">
-          <label className="flex items-center gap-2 text-sm">
+          <Label className="flex items-center gap-2 text-sm">
             <Checkbox checked={onToolCall} onCheckedChange={(v) => setOnToolCall(!!v)} /> 工具调用时触发
-          </label>
+          </Label>
           {onToolCall && (
             <div className="grid gap-1.5">
               <div className="text-muted-foreground text-xs">
@@ -1069,18 +1101,18 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
                 {tools.length === 0 && <span className="text-muted-foreground text-xs">（工具列表为空）</span>}
                 <div className="grid gap-1">
                   {tools.map((tool) => (
-                    <label key={tool.key} className="flex items-start gap-2 text-xs">
+                    <Label key={tool.key} className="flex items-start gap-2 text-xs">
                       <Checkbox className="mt-0.5" checked={toolNames.includes(tool.key)}
                         onCheckedChange={() => toggleTool(tool.key)} />
                       <span className="min-w-0">
                         <span className="font-medium">{tool.key}</span>
                         {tool.description && <span className="text-muted-foreground line-clamp-1"> {tool.description}</span>}
                       </span>
-                    </label>
+                    </Label>
                   ))}
                 </div>
               </div>
-              <Textarea className="text-xs" rows={2} value={toolCallMsg}
+              <Textarea aria-label="工具调用触发消息" className="text-xs" rows={2} value={toolCallMsg}
                 placeholder="工具被调用时发给 agent 的话（系统会附带任务信息、工具入参与返回内容）" onChange={(e) => setToolCallMsg(e.target.value)} />
             </div>
           )}
@@ -1088,11 +1120,11 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
 
         {/* 任务创建 */}
         <div className="grid gap-1.5">
-          <label className="flex items-center gap-2 text-sm">
+          <Label className="flex items-center gap-2 text-sm">
             <Checkbox checked={onTaskCreate} onCheckedChange={(v) => setOnTaskCreate(!!v)} /> 任务创建时触发
-          </label>
+          </Label>
           {onTaskCreate && (
-            <Textarea className="text-xs" rows={2} value={taskCreateMsg}
+            <Textarea aria-label="任务创建触发消息" className="text-xs" rows={2} value={taskCreateMsg}
               placeholder="任务被创建时发给 agent 的话（系统会附带任务编号与目标）" onChange={(e) => setTaskCreateMsg(e.target.value)} />
           )}
         </div>
@@ -1121,7 +1153,7 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
               editingId === t.id && "border-primary bg-primary/5",
             )}
           >
-            <Switch checked={t.enabled} onCheckedChange={() => toggleEnabled(t)} className="mt-0.5" />
+            <Switch aria-label={`启用触发器 ${t.id}`} checked={t.enabled} onCheckedChange={() => toggleEnabled(t)} className="mt-0.5" />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="font-medium">{condLabel(t)}</span>
@@ -1144,11 +1176,11 @@ function AgentTriggersTab({ agentKey, agent }: { agentKey: string; agent?: Agent
               </div>
             </div>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground"
-              onClick={() => startEdit(t)} title="编辑">
+              onClick={() => startEdit(t)} aria-label={`编辑触发器 ${t.id}`} title="编辑">
               <PencilIcon className="size-3.5" />
             </Button>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive"
-              onClick={() => del(t.id)} title="删除">
+              onClick={() => del(t.id)} aria-label={`删除触发器 ${t.id}`} title="删除">
               <Trash2Icon className="size-3.5" />
             </Button>
           </div>

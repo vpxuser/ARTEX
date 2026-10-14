@@ -8,6 +8,7 @@ import {
   ChevronRightIcon,
   GlobeIcon,
   KeyRoundIcon,
+  LayersIcon,
   LayoutTemplateIcon,
   LinkIcon,
   type LucideIcon,
@@ -98,6 +99,7 @@ function statusTone(code: number) {
 const PAGE_SIZES = [25, 50, 100, 200];
 
 const TABS: { key: string; label: string; icon: LucideIcon }[] = [
+  { key: "all", label: "全部资产", icon: LayersIcon },
   { key: "company", label: "企业", icon: BuildingIcon },
   { key: "root_domain", label: "根域名", icon: GlobeIcon },
   { key: "ip", label: "IP", icon: NetworkIcon },
@@ -107,12 +109,29 @@ const TABS: { key: string; label: string; icon: LucideIcon }[] = [
   { key: "endpoint", label: "接口", icon: LinkIcon },
 ];
 
+function assetLabel(asset: Asset) {
+  if (asset.type === "endpoint") {
+    const address = [asset.url, asset.domain].find(Boolean) ?? `#${asset.id}`;
+    return `${asset.method ?? ""} ${address}`.trim();
+  }
+  if (asset.type === "service") {
+    if (asset.url) return asset.url;
+    const host = [asset.domain, asset.ip, asset.service_name].find(Boolean) ?? `#${asset.id}`;
+    return `${host}${asset.port ? `:${asset.port}` : ""}`;
+  }
+  return [asset.domain, asset.ip, asset.app_name, asset.bundle_id].find(Boolean) ?? `资产 #${asset.id}`;
+}
+
+function assetTypeLabel(type: string) {
+  return TABS.find((item) => item.key === type)?.label ?? type;
+}
+
 export default function AssetsPage() {
   const [rows, setRows] = React.useState<Asset[]>([]);
   const [total, setTotal] = React.useState(0);
   const [companies, setCompanies] = React.useState<Company[]>([]);
   const [counts, setCounts] = React.useState<Record<string, number>>({});
-  const [tab, setTab] = React.useState("company");
+  const [tab, setTab] = React.useState("all");
   const [query, setQuery] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
@@ -122,38 +141,54 @@ export default function AssetsPage() {
   const [refreshKey, setRefreshKey] = React.useState(0);
   const assetsRequestRef = React.useRef(0);
   const [rowsTab, setRowsTab] = React.useState("");
+  const [metaLoading, setMetaLoading] = React.useState(true);
+  const [companiesLoaded, setCompaniesLoaded] = React.useState(false);
+  const [countsLoaded, setCountsLoaded] = React.useState(false);
+  const [companiesError, setCompaniesError] = React.useState("");
+  const [countsError, setCountsError] = React.useState("");
+  const metaRequestRef = React.useRef(0);
 
   // asset selection & delete
   const [selected, setSelected] = React.useState<Set<number>>(new Set());
-  const [deleteIds, setDeleteIds] = React.useState<number[]>([]);
+  const [deleteTargets, setDeleteTargets] = React.useState<Asset[]>([]);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState("");
 
   // company delete
   const [companyDeleteTarget, setCompanyDeleteTarget] = React.useState<Company | null>(null);
   const [companyDeleteAssets, setCompanyDeleteAssets] = React.useState(false);
   const [companyDeleting, setCompanyDeleting] = React.useState(false);
+  const [companyDeleteError, setCompanyDeleteError] = React.useState("");
 
   // Companies + per-type counts (tab badges) — loaded on demand, no background polling.
-  const loadMeta = React.useCallback(() => {
-    api
-      .companies()
-      .then(setCompanies)
-      .catch(() => {
-        /* Keep the last successful company snapshot on a transient failure. */
-      });
-    api
-      .assetCounts()
-      .then(setCounts)
-      .catch(() => {
-        /* Keep the last successful counters on a transient failure. */
-      });
+  const loadMeta = React.useCallback(async () => {
+    const request = ++metaRequestRef.current;
+    setMetaLoading(true);
+    const [companyResult, countsResult] = await Promise.allSettled([api.companies(), api.assetCounts()]);
+    if (metaRequestRef.current !== request) return;
+    if (companyResult.status === "fulfilled") {
+      setCompanies(companyResult.value);
+      setCompaniesLoaded(true);
+      setCompaniesError("");
+    } else {
+      setCompaniesError(String(companyResult.reason?.message ?? companyResult.reason));
+    }
+    if (countsResult.status === "fulfilled") {
+      setCounts(countsResult.value);
+      setCountsLoaded(true);
+      setCountsError("");
+    } else {
+      setCountsError(String(countsResult.reason?.message ?? countsResult.reason));
+    }
+    setMetaLoading(false);
   }, []);
 
   // Manual refresh: reload counts/companies and re-fetch the current page.
   const refresh = React.useCallback(() => {
-    loadMeta();
+    void loadMeta();
     setRefreshKey((k) => k + 1);
+    setLoaded(false);
     setSelected(new Set());
   }, [loadMeta]);
 
@@ -184,28 +219,34 @@ export default function AssetsPage() {
   };
 
   const openDelete = (ids: number[]) => {
-    setDeleteIds(ids);
+    const targets = rows.filter((asset) => ids.includes(asset.id));
+    if (targets.length === 0) return;
+    setDeleteTargets(targets);
+    setDeleteError("");
     setDeleteOpen(true);
   };
 
   const confirmDelete = async () => {
+    if (deleting || deleteTargets.length === 0) return;
     setDeleting(true);
+    setDeleteError("");
     try {
-      const res = await api.deleteAssets(deleteIds);
+      const res = await api.deleteAssets(deleteTargets.map((asset) => asset.id));
       toast.success(`已删除 ${res.deleted} 条资产`);
       setSelected(new Set());
+      setDeleteOpen(false);
       refresh();
     } catch (e) {
-      toast.error("删除失败：" + String((e as Error)?.message ?? e));
+      setDeleteError(`删除失败：${String((e as Error)?.message ?? e)}`);
     } finally {
       setDeleting(false);
-      setDeleteOpen(false);
     }
   };
 
   const confirmDeleteCompany = async () => {
-    if (!companyDeleteTarget) return;
+    if (!companyDeleteTarget || companyDeleting) return;
     setCompanyDeleting(true);
+    setCompanyDeleteError("");
     try {
       const res = await api.deleteCompany(companyDeleteTarget.id, companyDeleteAssets);
       const msg =
@@ -213,34 +254,57 @@ export default function AssetsPage() {
           ? `已删除企业，同时删除 ${res.assets_deleted} 条资产`
           : "已删除企业";
       toast.success(msg);
-      refresh();
-    } catch (e) {
-      toast.error("删除失败：" + String((e as Error)?.message ?? e));
-    } finally {
-      setCompanyDeleting(false);
       setCompanyDeleteTarget(null);
       setCompanyDeleteAssets(false);
+      refresh();
+    } catch (e) {
+      setCompanyDeleteError(`删除失败：${String((e as Error)?.message ?? e)}`);
+    } finally {
+      setCompanyDeleting(false);
     }
   };
 
   React.useEffect(() => {
-    loadMeta();
+    void loadMeta();
   }, [loadMeta]);
 
-  // Reset query + page + selection when switching tabs
-  // biome-ignore lint/correctness/useExhaustiveDependencies: tab changes intentionally reset tab-local controls.
-  React.useEffect(() => {
+  // Selection belongs to the visible page; changing its scope clears it immediately.
+  const changeTab = (value: string) => {
+    if (value === tab) return;
+    setTab(value);
     setQuery("");
+    setPage(0);
     setDslError("");
     setSelected(new Set());
     setRows([]);
     setRowsTab("");
     setTotal(0);
     setLoaded(false);
-  }, [tab]);
+    setLoading(false);
+  };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: these controls intentionally reset server pagination.
-  React.useEffect(() => setPage(0), [tab, size, query]);
+  const changeQuery = (value: string) => {
+    if (value === query) return;
+    setQuery(value);
+    setPage(0);
+    setLoaded(false);
+    setSelected(new Set());
+  };
+
+  const changeSize = (value: number) => {
+    if (value === size) return;
+    setSize(value);
+    setPage(0);
+    setLoaded(false);
+    setSelected(new Set());
+  };
+
+  const changePage = (value: number) => {
+    if (value === page) return;
+    setPage(value);
+    setLoaded(false);
+    setSelected(new Set());
+  };
 
   const dslMode = query.trim() !== "";
 
@@ -251,10 +315,13 @@ export default function AssetsPage() {
     const request = ++assetsRequestRef.current;
     const dsl = query.trim();
     setLoading(true);
+    setLoaded(false);
+    setDslError("");
     const offset = page * size;
     const run = async () => {
       try {
-        const r = dsl ? await api.searchAssets(dsl, tab, size, offset) : await api.assets(tab, size, offset);
+        const type = tab === "all" ? "" : tab;
+        const r = dsl ? await api.searchAssets(dsl, type, size, offset) : await api.assets(type, size, offset);
         if (assetsRequestRef.current !== request) return;
         setRows(r.assets);
         setRowsTab(tab);
@@ -281,10 +348,13 @@ export default function AssetsPage() {
   }, [tab, page, size, query, refreshKey]);
 
   React.useEffect(() => {
-    if (tab === "company") return;
+    if (tab === "company" || !loaded || loading || dslError) return;
     const lastPage = Math.max(0, Math.ceil(total / size) - 1);
-    if (page > lastPage) setPage(lastPage);
-  }, [page, size, tab, total]);
+    if (page > lastPage) {
+      setPage(lastPage);
+      setSelected(new Set());
+    }
+  }, [dslError, loaded, loading, page, size, tab, total]);
 
   const companyById = React.useMemo(() => {
     const m = new Map<number, string>();
@@ -292,10 +362,10 @@ export default function AssetsPage() {
     return m;
   }, [companies]);
 
-  const companyName = (id?: number) => (id ? (companyById.get(id) ?? "") : "");
+  const companyName = (id?: number) => (id ? (companyById.get(id) ?? `企业 #${id}`) : "");
 
-  const tabCounts: Record<string, number> = { ...counts, company: companies.length };
   const totalAssets = Object.values(counts).reduce((a, b) => a + b, 0);
+  const tabCounts: Record<string, number> = { ...counts, company: companies.length, all: totalAssets };
 
   // rows are already the current server-side page.
   const tabData = (type: string): Asset[] => (rowsTab === type ? rows : []);
@@ -305,7 +375,7 @@ export default function AssetsPage() {
   const searchBox = (
     <AssetDslSearch
       query={query}
-      onChange={setQuery}
+      onChange={changeQuery}
       loading={loading}
       error={dslError}
       count={dslMode ? total : undefined}
@@ -313,39 +383,140 @@ export default function AssetsPage() {
   );
 
   return (
-    <div className="flex h-[calc(100vh-6rem)] min-h-0 flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <div>
+    <div className="flex h-[calc(100vh-6rem)] min-h-[28rem] min-w-0 flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-baseline gap-3">
           <h1 className="text-xl font-semibold tracking-tight">资产</h1>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">
-            共 <span className="tabular-nums">{totalAssets}</span> 项资产
+          <span className="text-sm text-muted-foreground" aria-live="polite">
+            {countsLoaded ? (
+              <>
+                共 <span className="tabular-nums">{totalAssets}</span> 项资产{countsError ? "（上次统计）" : ""}
+              </>
+            ) : countsError ? (
+              "资产总数暂不可用"
+            ) : (
+              "正在统计…"
+            )}
           </span>
-          {selected.size > 0 && (
-            <Button variant="destructive" size="sm" onClick={() => openDelete(Array.from(selected) as number[])}>
-              <Trash2Icon className="size-3.5" /> 删除已选 ({selected.size})
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-            <RefreshCwIcon className={cn("size-4", loading && "animate-spin")} /> 刷新
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading || metaLoading}>
+            <RefreshCwIcon className={cn("size-4", (loading || metaLoading) && "animate-spin")} /> 刷新
           </Button>
           <CompanyDialog onSaved={refresh} />
         </div>
       </div>
 
-      <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-4">
+      {(companiesError || countsError) && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/30 px-3 py-2 text-sm"
+        >
+          <p className="min-w-0 flex-1 break-words">
+            {companiesError && `企业信息加载失败${companiesLoaded ? "，暂显示上次数据" : ""}。`}
+            {countsError && `资产统计加载失败${countsLoaded ? "，暂显示上次统计" : ""}。`}
+          </p>
+          <Button size="sm" variant="outline" onClick={() => void loadMeta()} disabled={metaLoading}>
+            重试
+          </Button>
+        </div>
+      )}
+
+      <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
         <div className="overflow-x-auto overflow-y-hidden">
           <TabsList variant="default">
             {TABS.map((t) => (
               <TabsTrigger key={t.key} value={t.key}>
                 <t.icon className="size-3.5" />
                 {t.label}
-                <span className="ml-1 tabular-nums text-muted-foreground">{tabCounts[t.key]}</span>
+                <span className="ml-1 tabular-nums">
+                  {(t.key === "company" ? companiesLoaded : countsLoaded) ? (tabCounts[t.key] ?? 0) : "—"}
+                </span>
               </TabsTrigger>
             ))}
           </TabsList>
         </div>
+
+        {tab !== "company" && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
+            <p className="min-w-0 flex-1" aria-live="polite">
+              {selected.size > 0 ? `当前页已选 ${selected.size} 项。` : "勾选仅限当前页。"}
+              切换类型、搜索或翻页会清空选择。
+            </p>
+            {selected.size > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => setSelected(new Set())}>
+                  清空选择
+                </Button>
+                <Button variant="destructive" size="sm" onClick={() => openDelete(Array.from(selected))}>
+                  <Trash2Icon className="size-3.5" /> 删除已选 ({selected.size})
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <TabsContent value="all" className="mt-0 flex min-h-0 flex-1 flex-col gap-2">
+          {searchBox}
+          <AssetCard
+            cols={["", "资产", "类型", "归属企业", ""]}
+            loaded={loaded}
+            loading={loading}
+            error={dslError}
+            onRetry={refresh}
+            emptyMessage={
+              dslMode
+                ? "未找到匹配资产，请调整或清除搜索条件。"
+                : "暂无资产。完成任务的资产收集后，结果会显示在这里；也可新增企业并设置资产范围。"
+            }
+            total={total}
+            page={page}
+            size={size}
+            onSize={changeSize}
+            onPage={changePage}
+            rows={currentRows}
+            selected={selected}
+            onToggleAll={toggleSelectAll}
+          >
+            {tabData("all").map((asset) => (
+              <TableRow key={asset.id} className={selected.has(asset.id) ? "bg-muted/40" : undefined}>
+                <TableCell className="w-8 pr-0">
+                  <Checkbox
+                    aria-label={`选择资产 ${assetLabel(asset)}`}
+                    checked={selected.has(asset.id)}
+                    onCheckedChange={() => toggleSelect(asset.id)}
+                  />
+                </TableCell>
+                <TableCell className="min-w-48 max-w-md whitespace-normal">
+                  <div className="break-all font-mono text-xs font-medium">{assetLabel(asset)}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    #{asset.id}
+                    {asset.page_title ? ` · ${asset.page_title}` : ""}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="secondary" className="text-xs">
+                    {assetTypeLabel(asset.type)}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-xs">
+                  {companyName(asset.company_id) || <span className="text-muted-foreground">未归属</span>}
+                </TableCell>
+                <TableCell className="w-8 pl-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:text-destructive"
+                    onClick={() => openDelete([asset.id])}
+                    aria-label={`删除资产 ${assetLabel(asset)}`}
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </AssetCard>
+        </TabsContent>
 
         {/* 企业 */}
         <TabsContent value="company" className="mt-0 flex min-h-0 flex-1 flex-col">
@@ -394,6 +565,7 @@ export default function AssetsPage() {
                             onClick={() => {
                               setCompanyDeleteTarget(c);
                               setCompanyDeleteAssets(false);
+                              setCompanyDeleteError("");
                             }}
                             aria-label={`删除企业 ${c.name}`}
                           >
@@ -405,8 +577,26 @@ export default function AssetsPage() {
                   ))}
                   {companies.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={4} className="py-10 text-center text-sm text-muted-foreground">
-                        还没有企业。点击右上角「新增企业」并填写资产范围，系统会自动认领命中的资产。
+                      <TableCell
+                        colSpan={4}
+                        className="whitespace-normal py-8 text-center text-sm text-muted-foreground"
+                      >
+                        {!companiesLoaded ? (
+                          companiesError ? (
+                            "企业信息加载失败，请重试。"
+                          ) : (
+                            "正在加载企业…"
+                          )
+                        ) : companiesError ? (
+                          "企业信息暂不可用，请重试。"
+                        ) : (
+                          <div className="mx-auto max-w-md space-y-3">
+                            <p>还没有企业。新增企业并填写资产范围，可将已有资产归属到企业。</p>
+                            <Button variant="outline" size="sm" onClick={() => changeTab("all")}>
+                              查看全部资产
+                            </Button>
+                          </div>
+                        )}
                       </TableCell>
                     </TableRow>
                   )}
@@ -422,11 +612,17 @@ export default function AssetsPage() {
           <AssetCard
             cols={["", "域名", "ICP 备案", "归属企业", ""]}
             loaded={loaded}
+            loading={loading}
+            error={dslError}
+            onRetry={refresh}
+            emptyMessage={
+              dslMode ? "未找到匹配资产，请调整或清除搜索条件。" : "暂无此类资产。可切换至全部资产查看已有结果。"
+            }
             total={total}
             page={page}
             size={size}
-            onSize={setSize}
-            onPage={setPage}
+            onSize={changeSize}
+            onPage={changePage}
             rows={currentRows}
             selected={selected}
             onToggleAll={(ids) => toggleSelectAll(ids)}
@@ -434,7 +630,11 @@ export default function AssetsPage() {
             {slice(tabData("root_domain")).map((a) => (
               <TableRow key={a.id} className={selected.has(a.id) ? "bg-muted/40" : undefined}>
                 <TableCell className="w-8 pr-0">
-                  <Checkbox checked={selected.has(a.id)} onCheckedChange={() => toggleSelect(a.id)} />
+                  <Checkbox
+                    aria-label={`选择资产 ${assetLabel(a)}`}
+                    checked={selected.has(a.id)}
+                    onCheckedChange={() => toggleSelect(a.id)}
+                  />
                 </TableCell>
                 <TableCell className="font-mono text-xs font-medium">{a.domain}</TableCell>
                 <TableCell className="text-xs">{a.icp || "—"}</TableCell>
@@ -463,11 +663,17 @@ export default function AssetsPage() {
           <AssetCard
             cols={["", "IP", "C段", "绑定域名", "开放端口", ""]}
             loaded={loaded}
+            loading={loading}
+            error={dslError}
+            onRetry={refresh}
+            emptyMessage={
+              dslMode ? "未找到匹配资产，请调整或清除搜索条件。" : "暂无此类资产。可切换至全部资产查看已有结果。"
+            }
             total={total}
             page={page}
             size={size}
-            onSize={setSize}
-            onPage={setPage}
+            onSize={changeSize}
+            onPage={changePage}
             rows={currentRows}
             selected={selected}
             onToggleAll={(ids) => toggleSelectAll(ids)}
@@ -475,7 +681,11 @@ export default function AssetsPage() {
             {slice(tabData("ip")).map((a) => (
               <TableRow key={a.id} className={selected.has(a.id) ? "bg-muted/40" : undefined}>
                 <TableCell className="w-8 pr-0">
-                  <Checkbox checked={selected.has(a.id)} onCheckedChange={() => toggleSelect(a.id)} />
+                  <Checkbox
+                    aria-label={`选择资产 ${assetLabel(a)}`}
+                    checked={selected.has(a.id)}
+                    onCheckedChange={() => toggleSelect(a.id)}
+                  />
                 </TableCell>
                 <TableCell className="font-mono text-xs font-medium">{a.ip}</TableCell>
                 <TableCell className="font-mono text-xs">{a.c_segment || "—"}</TableCell>
@@ -510,11 +720,17 @@ export default function AssetsPage() {
           <AssetCard
             cols={["", "域名", "根域名", "解析类型", "解析值", ""]}
             loaded={loaded}
+            loading={loading}
+            error={dslError}
+            onRetry={refresh}
+            emptyMessage={
+              dslMode ? "未找到匹配资产，请调整或清除搜索条件。" : "暂无此类资产。可切换至全部资产查看已有结果。"
+            }
             total={total}
             page={page}
             size={size}
-            onSize={setSize}
-            onPage={setPage}
+            onSize={changeSize}
+            onPage={changePage}
             rows={currentRows}
             selected={selected}
             onToggleAll={(ids) => toggleSelectAll(ids)}
@@ -522,7 +738,11 @@ export default function AssetsPage() {
             {slice(tabData("subdomain")).map((a) => (
               <TableRow key={a.id} className={selected.has(a.id) ? "bg-muted/40" : undefined}>
                 <TableCell className="w-8 pr-0">
-                  <Checkbox checked={selected.has(a.id)} onCheckedChange={() => toggleSelect(a.id)} />
+                  <Checkbox
+                    aria-label={`选择资产 ${assetLabel(a)}`}
+                    checked={selected.has(a.id)}
+                    onCheckedChange={() => toggleSelect(a.id)}
+                  />
                 </TableCell>
                 <TableCell className="font-mono text-xs font-medium">{a.domain}</TableCell>
                 <TableCell className="font-mono text-xs">{a.root_domain || "—"}</TableCell>
@@ -552,11 +772,17 @@ export default function AssetsPage() {
           <AssetCard
             cols={["", "应用名", "Bundle ID", "分类", "ICP 备案", ""]}
             loaded={loaded}
+            loading={loading}
+            error={dslError}
+            onRetry={refresh}
+            emptyMessage={
+              dslMode ? "未找到匹配资产，请调整或清除搜索条件。" : "暂无此类资产。可切换至全部资产查看已有结果。"
+            }
             total={total}
             page={page}
             size={size}
-            onSize={setSize}
-            onPage={setPage}
+            onSize={changeSize}
+            onPage={changePage}
             rows={currentRows}
             selected={selected}
             onToggleAll={(ids) => toggleSelectAll(ids)}
@@ -564,7 +790,11 @@ export default function AssetsPage() {
             {slice(tabData("app")).map((a) => (
               <TableRow key={a.id} className={selected.has(a.id) ? "bg-muted/40" : undefined}>
                 <TableCell className="w-8 pr-0">
-                  <Checkbox checked={selected.has(a.id)} onCheckedChange={() => toggleSelect(a.id)} />
+                  <Checkbox
+                    aria-label={`选择资产 ${assetLabel(a)}`}
+                    checked={selected.has(a.id)}
+                    onCheckedChange={() => toggleSelect(a.id)}
+                  />
                 </TableCell>
                 <TableCell className="text-xs font-medium">{a.app_name || "—"}</TableCell>
                 <TableCell className="font-mono text-xs">{a.bundle_id || "—"}</TableCell>
@@ -592,11 +822,17 @@ export default function AssetsPage() {
           <AssetCard
             cols={["", "服务", "域名", "IP", "端口", "状态码", "标题", "指纹", "认证", ""]}
             loaded={loaded}
+            loading={loading}
+            error={dslError}
+            onRetry={refresh}
+            emptyMessage={
+              dslMode ? "未找到匹配资产，请调整或清除搜索条件。" : "暂无此类资产。可切换至全部资产查看已有结果。"
+            }
             total={total}
             page={page}
             size={size}
-            onSize={setSize}
-            onPage={setPage}
+            onSize={changeSize}
+            onPage={changePage}
             rows={currentRows}
             selected={selected}
             onToggleAll={(ids) => toggleSelectAll(ids)}
@@ -622,7 +858,11 @@ export default function AssetsPage() {
               return (
                 <TableRow key={a.id} className={selected.has(a.id) ? "bg-muted/40" : undefined}>
                   <TableCell className="w-8 pr-0">
-                    <Checkbox checked={selected.has(a.id)} onCheckedChange={() => toggleSelect(a.id)} />
+                    <Checkbox
+                      aria-label={`选择资产 ${assetLabel(a)}`}
+                      checked={selected.has(a.id)}
+                      onCheckedChange={() => toggleSelect(a.id)}
+                    />
                   </TableCell>
                   <TableCell className="text-xs">
                     <Badge variant={isHttp ? "default" : "secondary"} className="font-mono text-[10px]">
@@ -688,11 +928,17 @@ export default function AssetsPage() {
           <AssetCard
             cols={["", "方法", "完整地址", "参数", ""]}
             loaded={loaded}
+            loading={loading}
+            error={dslError}
+            onRetry={refresh}
+            emptyMessage={
+              dslMode ? "未找到匹配资产，请调整或清除搜索条件。" : "暂无此类资产。可切换至全部资产查看已有结果。"
+            }
             total={total}
             page={page}
             size={size}
-            onSize={setSize}
-            onPage={setPage}
+            onSize={changeSize}
+            onPage={changePage}
             rows={currentRows}
             selected={selected}
             onToggleAll={(ids) => toggleSelectAll(ids)}
@@ -700,7 +946,11 @@ export default function AssetsPage() {
             {slice(tabData("endpoint")).map((a) => (
               <TableRow key={a.id} className={selected.has(a.id) ? "bg-muted/40" : undefined}>
                 <TableCell className="w-8 pr-0">
-                  <Checkbox checked={selected.has(a.id)} onCheckedChange={() => toggleSelect(a.id)} />
+                  <Checkbox
+                    aria-label={`选择资产 ${assetLabel(a)}`}
+                    checked={selected.has(a.id)}
+                    onCheckedChange={() => toggleSelect(a.id)}
+                  />
                 </TableCell>
                 <TableCell className="w-16">
                   <MethodBadge method={a.method || ""} />
@@ -734,15 +984,35 @@ export default function AssetsPage() {
         </TabsContent>
       </Tabs>
 
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <AlertDialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!deleting) setDeleteOpen(open);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
-              将永久删除 <span className="font-semibold tabular-nums">{deleteIds.length}</span>{" "}
+              将永久删除 <span className="font-semibold tabular-nums">{deleteTargets.length}</span>{" "}
               条资产记录，此操作不可撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <ul aria-label="待删除的资产" className="max-h-60 space-y-2 overflow-y-auto rounded-md border p-3 text-sm">
+            {deleteTargets.map((asset) => (
+              <li key={asset.id} className="space-y-0.5">
+                <p className="break-all font-mono text-xs">{assetLabel(asset)}</p>
+                <p className="text-xs text-muted-foreground">
+                  {assetTypeLabel(asset.type)} · #{asset.id}
+                </p>
+              </li>
+            ))}
+          </ul>
+          {deleteError && (
+            <p role="alert" className="break-words text-sm text-destructive">
+              {deleteError}。请重试或取消。
+            </p>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
             <AlertDialogAction
@@ -762,9 +1032,10 @@ export default function AssetsPage() {
       <AlertDialog
         open={!!companyDeleteTarget}
         onOpenChange={(o) => {
-          if (!o) {
+          if (!o && !companyDeleting) {
             setCompanyDeleteTarget(null);
             setCompanyDeleteAssets(false);
+            setCompanyDeleteError("");
           }
         }}
       >
@@ -781,6 +1052,7 @@ export default function AssetsPage() {
                   <Checkbox
                     id="delete-assets-opt"
                     checked={companyDeleteAssets}
+                    disabled={companyDeleting}
                     onCheckedChange={(v) => setCompanyDeleteAssets(!!v)}
                   />
                   <span className="text-sm leading-snug">
@@ -791,6 +1063,11 @@ export default function AssetsPage() {
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {companyDeleteError && (
+            <p role="alert" className="break-words text-sm text-destructive">
+              {companyDeleteError}。请重试或取消。
+            </p>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={companyDeleting}>取消</AlertDialogCancel>
             <AlertDialogAction
@@ -813,6 +1090,10 @@ export default function AssetsPage() {
 function AssetCard({
   cols,
   loaded,
+  loading,
+  error,
+  onRetry,
+  emptyMessage,
   total,
   page,
   size,
@@ -825,11 +1106,15 @@ function AssetCard({
 }: {
   cols: string[];
   loaded: boolean;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+  emptyMessage: string;
   total: number;
   page: number;
   size: number;
-  onSize: React.Dispatch<React.SetStateAction<number>>;
-  onPage: React.Dispatch<React.SetStateAction<number>>;
+  onSize: (value: number) => void;
+  onPage: (value: number) => void;
   rows?: Asset[];
   selected?: Set<number>;
   onToggleAll?: (ids: number[]) => void;
@@ -845,7 +1130,7 @@ function AssetCard({
   const someSelected = selected != null && pageIds.some((id) => selected.has(id));
 
   return (
-    <Card className="flex min-h-0 flex-1 flex-col overflow-hidden py-0">
+    <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden py-0" aria-busy={loading}>
       <div className="min-h-0 flex-1 overflow-auto scrollbar-thin scrollbar-track-transparent">
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-card">
@@ -854,33 +1139,51 @@ function AssetCard({
                 c === "" && i === 0 && onToggleAll ? (
                   <TableHead key={i} className="w-8 pr-0">
                     <Checkbox
+                      aria-label="选择当前页的全部资产"
+                      disabled={loading || !loaded || dataRows?.length === 0}
                       checked={allSelected ? true : someSelected ? "indeterminate" : false}
                       onCheckedChange={() => onToggleAll(pageIds)}
                     />
                   </TableHead>
                 ) : (
-                  <TableHead key={c + i}>{c}</TableHead>
+                  <TableHead key={c + i}>{c || <span className="sr-only">操作</span>}</TableHead>
                 ),
               )}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {childRows.length > 0 ? (
+            {loaded && !loading && !error && childRows.length > 0 ? (
               childRows
             ) : (
               <TableRow>
-                <TableCell colSpan={cols.length} className="py-12 text-center text-sm text-muted-foreground">
-                  {loaded ? "暂无数据。" : "加载中…"}
+                <TableCell
+                  colSpan={cols.length}
+                  className="whitespace-normal py-12 text-center text-sm text-muted-foreground"
+                >
+                  {!loaded || loading ? (
+                    "正在加载资产…"
+                  ) : error ? (
+                    <div role="alert" className="mx-auto max-w-md space-y-3">
+                      <p>
+                        资产加载失败：<span className="break-all">{error}</span>
+                      </p>
+                      <Button variant="outline" size="sm" onClick={onRetry}>
+                        重试
+                      </Button>
+                    </div>
+                  ) : (
+                    emptyMessage
+                  )}
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </div>
-      {total > 0 && (
-        <div className="flex shrink-0 items-center gap-2 border-t px-3 py-1.5 text-xs text-muted-foreground">
+      {total > 0 && !error && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
           <Select value={String(size)} onValueChange={(v) => onSize(Number(v))}>
-            <SelectTrigger size="sm" className="h-7 w-24">
+            <SelectTrigger aria-label="每页条数" size="sm" className="h-7 w-24">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -893,29 +1196,29 @@ function AssetCard({
               </SelectGroup>
             </SelectContent>
           </Select>
-          <span className="tabular-nums">
-            {start}–{end} / {total}
-          </span>
+          <span className="whitespace-nowrap tabular-nums">{loading ? "加载中…" : `${start}–${end} / ${total}`}</span>
           {pageCount > 1 && (
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="icon"
                 className="size-7"
-                disabled={page <= 0}
-                onClick={() => onPage((p) => Math.max(0, p - 1))}
+                aria-label="上一页"
+                disabled={loading || page <= 0}
+                onClick={() => onPage(Math.max(0, page - 1))}
               >
                 <ChevronLeftIcon />
               </Button>
-              <span className="tabular-nums">
+              <span className="whitespace-nowrap tabular-nums">
                 {page + 1} / {pageCount}
               </span>
               <Button
                 variant="outline"
                 size="icon"
                 className="size-7"
-                disabled={page + 1 >= pageCount}
-                onClick={() => onPage((p) => Math.min(pageCount - 1, p + 1))}
+                aria-label="下一页"
+                disabled={loading || page + 1 >= pageCount}
+                onClick={() => onPage(Math.min(pageCount - 1, page + 1))}
               >
                 <ChevronRightIcon />
               </Button>

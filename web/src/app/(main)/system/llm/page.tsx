@@ -96,7 +96,7 @@ function healthOf(p: LLMProfile, m?: LLMPoolMember): Health {
       hint: m.last_error,
     };
   }
-  return { label: "正常", cls: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400" };
+  return { label: "正常", cls: "border-emerald-500/50 text-emerald-800 dark:text-emerald-400" };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ function PoolSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex flex-col gap-0 p-0 data-[side=right]:sm:max-w-lg">
+      <SheetContent side="right" className="flex flex-col gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg">
         <SheetHeader className="px-4">
           <SheetTitle className="flex items-center gap-2">
             <ZapIcon className="size-4" /> LLM 轮询 · 故障转移
@@ -236,7 +236,7 @@ function PoolSheet({
                         </span>
                         <span className="font-medium">{m.name}</span>
                         {m.active && (
-                          <Badge variant="outline" className="border-amber-400/50 text-amber-500">
+                          <Badge variant="outline" className="border-amber-400/50 text-amber-800 dark:text-amber-300">
                             激活
                           </Badge>
                         )}
@@ -461,13 +461,13 @@ function ProfileSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex flex-col gap-0 p-0 data-[side=right]:min-w-[420px] data-[side=right]:sm:max-w-xl"
+        className="flex flex-col gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl"
       >
         <SheetHeader className="px-4">
           <SheetTitle className="flex items-center gap-2">
             {isNew ? "新建模型配置" : `编辑：${profile?.name}`}
             {profile?.is_default && (
-              <Badge variant="outline" className="border-amber-400/50 text-amber-500">
+              <Badge variant="outline" className="border-amber-400/50 text-amber-800 dark:text-amber-300">
                 激活中
               </Badge>
             )}
@@ -493,7 +493,7 @@ function ProfileSheet({
             <div className="grid gap-2">
               <Label>格式</Label>
               <Select value={format} onValueChange={(v) => setFormat(v as "anthropic" | "openai" | "openai-responses")}>
-                <SelectTrigger>
+                <SelectTrigger aria-label="模型接口格式">
                   <SelectValue placeholder="选择格式" />
                 </SelectTrigger>
                 <SelectContent>
@@ -526,6 +526,7 @@ function ProfileSheet({
                     className="shrink-0"
                     disabled={loadingModels}
                     onClick={loadModels}
+                    aria-label="从 API 加载可用模型"
                     title="从 API 加载可用模型"
                   >
                     {loadingModels ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
@@ -633,7 +634,7 @@ function ProfileSheet({
           </p>
 
           <div className="grid gap-3 rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="grid gap-0.5">
                 <Label htmlFor="p-priority" className="text-sm">
                   轮询优先级
@@ -650,7 +651,7 @@ function ProfileSheet({
                 onChange={(e) => setPriority(e.target.value)}
               />
             </div>
-            <div className="flex items-center justify-between gap-4 border-t pt-3">
+            <div className="flex flex-col items-start gap-4 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="grid gap-0.5">
                 <Label className="text-sm">不参与轮询</Label>
                 <p className="text-muted-foreground text-xs">
@@ -660,7 +661,7 @@ function ProfileSheet({
               </div>
               <Switch checked={poolExclude} onCheckedChange={setPoolExclude} aria-label="不参与轮询" />
             </div>
-            <div className="flex items-center justify-between gap-4 border-t pt-3">
+            <div className="flex flex-col items-start gap-4 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="grid gap-0.5">
                 <Label className="text-sm">流式输出 · streaming</Label>
                 <p className="text-muted-foreground text-xs">
@@ -674,7 +675,7 @@ function ProfileSheet({
           </div>
 
           <div className="grid gap-3 rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="grid gap-0.5">
                 <Label htmlFor="p-max-tokens" className="text-sm">
                   输出上限 · max tokens
@@ -695,7 +696,7 @@ function ProfileSheet({
                 placeholder="0"
               />
             </div>
-            <div className="flex items-center justify-between gap-4 border-t pt-3">
+            <div className="flex flex-col items-start gap-4 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="grid gap-0.5">
                 <Label className="text-sm">上限字段名</Label>
                 <p className="text-muted-foreground text-xs">{MAX_TOKENS_FIELD_HINTS[format]}</p>
@@ -705,7 +706,7 @@ function ProfileSheet({
                 onValueChange={setMaxTokensField}
                 disabled={format !== "openai"}
               >
-                <SelectTrigger className="w-56 shrink-0">
+                <SelectTrigger aria-label="输出上限字段名" className="w-full sm:w-56 shrink-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -720,7 +721,7 @@ function ProfileSheet({
           </div>
 
           <div className="grid gap-3 rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="grid gap-0.5">
                 <Label className="text-sm">思考开关 · thinking.type</Label>
                 <p className="text-muted-foreground text-xs">
@@ -729,7 +730,7 @@ function ProfileSheet({
                 </p>
               </div>
               <Select value={thinkingType} onValueChange={setThinkingType}>
-                <SelectTrigger className="w-32 shrink-0">
+                <SelectTrigger aria-label="思考开关" className="w-full sm:w-32 shrink-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -741,7 +742,7 @@ function ProfileSheet({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center justify-between gap-4 border-t pt-3">
+            <div className="flex flex-col items-start gap-4 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="grid gap-0.5">
                 <Label className="text-sm">思考强度 · reasoning_effort</Label>
                 <p className="text-muted-foreground text-xs">
@@ -750,7 +751,7 @@ function ProfileSheet({
                 </p>
               </div>
               <Select value={effort} onValueChange={setEffort}>
-                <SelectTrigger className="w-32 shrink-0">
+                <SelectTrigger aria-label="思考强度" className="w-full sm:w-32 shrink-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -789,6 +790,9 @@ export default function LLMPage() {
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [pool, setPool] = React.useState<LLMPoolStatus | null>(null);
   const [poolOpen, setPoolOpen] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
+  const [poolError, setPoolError] = React.useState("");
   // 抽屉的开关和内容分开存：关闭时 editing 保持不变，否则关闭动画期间标题会从
   // 「编辑 X」闪成「新建」。editing = null 表示新建。
   const [editOpen, setEditOpen] = React.useState(false);
@@ -801,16 +805,21 @@ export default function LLMPage() {
   const loadPool = React.useCallback(async () => {
     try {
       setPool(await api.llmPool());
-    } catch {
-      /* ignore */
+      setPoolError("");
+    } catch (e) {
+      setPoolError(`读取轮询状态失败：${(e as Error).message}`);
     }
   }, []);
 
   const load = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
     try {
       setProfiles(await api.llmProfiles());
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setLoadError(`读取模型配置失败：${(e as Error).message}`);
+    } finally {
+      setLoading(false);
     }
     await loadPool();
   }, [loadPool]);
@@ -862,10 +871,10 @@ export default function LLMPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setPoolOpen(true)}>
+          <Button size="sm" variant="outline" disabled={!pool || !!poolError} onClick={() => setPoolOpen(true)}>
             <ZapIcon /> 轮询配置
             {poolOn && (
-              <Badge variant="outline" className="ml-1 border-emerald-500/50 text-emerald-600 dark:text-emerald-400">
+              <Badge variant="outline" className="ml-1 border-emerald-500/50 text-emerald-800 dark:text-emerald-400">
                 已开启
               </Badge>
             )}
@@ -883,24 +892,18 @@ export default function LLMPage() {
         </TabsList>
 
         <TabsContent value="profiles" className="mt-4">
+          {loadError && <div role="alert" className="mb-4 rounded-lg border p-4 text-sm"><p>{loadError}</p><Button variant="outline" size="sm" onClick={() => void load()}>重试</Button></div>}
+          {poolError && <div role="alert" className="mb-4 rounded-lg border p-4 text-sm"><p>{poolError}</p><Button variant="outline" size="sm" onClick={() => void loadPool()}>重试轮询状态</Button></div>}
+          {loading && <p role="status" className="p-4 text-sm text-muted-foreground">正在读取模型配置…</p>}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {profiles.map((p) => {
-              const h = healthOf(p, health.get(p.id));
+              const h: Health = poolError || !pool ? { label: "状态未知", cls: "text-muted-foreground" } : healthOf(p, health.get(p.id));
               return (
-                // biome-ignore lint/a11y/useSemanticElements: 卡片内含自己的操作按钮，用原生 <button> 会造成按钮嵌套（非法 HTML）
                 <Card
                   key={p.id}
-                  role="button"
-                  tabIndex={0}
                   onClick={() => openEditor(p)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      openEditor(p);
-                    }
-                  }}
                   className={cn(
-                    "cursor-pointer gap-0 py-4 outline-none transition-colors hover:border-foreground/30",
+                    "gap-0 py-4 transition-colors hover:border-foreground/30",
                     p.is_default && "border-amber-400/50 bg-amber-400/5",
                   )}
                 >
@@ -914,7 +917,7 @@ export default function LLMPage() {
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="truncate font-medium text-sm">{p.name}</span>
+                          <button type="button" className="truncate text-left font-medium text-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={() => openEditor(p)} aria-label={`编辑模型配置 ${p.name}`}>{p.name}</button>
                           <Badge variant="outline" className="uppercase">
                             {p.format}
                           </Badge>
@@ -957,7 +960,7 @@ export default function LLMPage() {
                       <Button
                         size="icon"
                         variant="outline"
-                        aria-label="删除配置"
+                        aria-label={`删除模型配置 ${p.name}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           void remove(p);
@@ -970,7 +973,7 @@ export default function LLMPage() {
                 </Card>
               );
             })}
-            {profiles.length === 0 && (
+            {!loading && !loadError && profiles.length === 0 && (
               <div className="col-span-full rounded-lg border border-dashed p-10 text-center text-muted-foreground text-sm">
                 还没有模型配置，点击右上角「新建」创建第一个。
               </div>

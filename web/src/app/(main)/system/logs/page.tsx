@@ -20,7 +20,7 @@ const MOCK_LOGS: LogLine[] = [
 
 const levelTone: Record<LogLine["level"], string> = {
   info: "text-foreground/80",
-  warn: "text-amber-600 dark:text-amber-400",
+  warn: "text-amber-800 dark:text-amber-400",
   error: "text-red-600 dark:text-red-400",
 };
 const levelDot: Record<LogLine["level"], string> = {
@@ -179,12 +179,13 @@ export default function LogsPage() {
           </Button>
           <span className="ml-auto text-xs text-muted-foreground">
             {counts.total} 行 ·{" "}
-            <span className="text-amber-600 dark:text-amber-400">{counts.warn} 警告</span> ·{" "}
+            <span className="text-amber-800 dark:text-amber-400">{counts.warn} 警告</span> ·{" "}
             <span className="text-red-600 dark:text-red-400">{counts.error} 错误</span>
           </span>
         </div>
 
-        <div
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this independently scrollable log region. */}
+        <section aria-label="实时系统日志" tabIndex={0}
           onScroll={(e) => {
             const el = e.currentTarget;
             stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -225,7 +226,7 @@ export default function LogsPage() {
             })
           )}
           <div ref={bottom} />
-        </div>
+        </section>
       </div>
     </div>
   );

@@ -35,7 +35,6 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api } from "@/lib/api";
@@ -82,6 +81,7 @@ interface AssetTreeState {
   droppedKinds: string[];
   loaded: boolean;
   loading: boolean;
+  error?: string;
 }
 
 const EMPTY_ASSET_TREE: AssetTreeState = {
@@ -101,6 +101,7 @@ interface GroupFindingsState {
   pageSize: number;
   loaded: boolean;
   loading: boolean;
+  error?: string;
 }
 
 // 平铺视图的页码单独放 state(而非塞进快照),筛选一变就能连带重置并触发重新加载。
@@ -109,6 +110,7 @@ interface FlatFindingsState {
   total: number;
   loaded: boolean;
   loading: boolean;
+  error?: string;
 }
 
 const EMPTY_FLAT_STATE: FlatFindingsState = { items: [], total: 0, loaded: false, loading: false };
@@ -145,6 +147,9 @@ export default function FindingsPage() {
   const [assetScope, setAssetScope] = React.useState<string | null>(null);
   const [groups, setGroups] = React.useState<FindingGroup[]>([]);
   const [groupTotal, setGroupTotal] = React.useState(0);
+  const [groupsError, setGroupsError] = React.useState("");
+  const [groupsLoaded, setGroupsLoaded] = React.useState(false);
+  const [groupsLoading, setGroupsLoading] = React.useState(false);
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(() => new Set());
   const [groupFindings, setGroupFindings] = React.useState<Record<string, GroupFindingsState>>({});
   const [total, setTotal] = React.useState(0);
@@ -334,10 +339,10 @@ export default function FindingsPage() {
       });
       if (request !== flatRequest.current || activeFilterFingerprint.current !== requestFilter) return;
       setFlat({ items: result.items, total: result.total, loaded: true, loading: false });
-    } catch {
+    } catch (error) {
       if (request !== flatRequest.current || activeFilterFingerprint.current !== requestFilter) return;
       // Polling keeps the last successful snapshot visible.
-      setFlat((current) => ({ ...current, loading: false }));
+      setFlat((current) => ({ ...current, loading: false, error: (error as Error).message || "请求失败" }));
     }
   }, [activeAssetScope, filterFingerprint, flatPage, flatPageSize, severity, status, vulnclass, task, query, sort]);
 
@@ -361,7 +366,7 @@ export default function FindingsPage() {
       });
     } catch (e) {
       if (request !== assetTreeRequest.current || activeFilterFingerprint.current !== requestFilter) return;
-      setAssetTree((current) => ({ ...current, loading: false }));
+      setAssetTree((current) => ({ ...current, loading: false, error: (e as Error).message || "请求失败" }));
       toast.error(`资产树加载失败：${(e as Error).message}`);
     }
   }, [filterFingerprint, severity, status, vulnclass, task, query, sort]);
@@ -370,6 +375,7 @@ export default function FindingsPage() {
     const requestFilter = filterFingerprint;
     if (activeFilterFingerprint.current !== requestFilter) return;
     const request = ++groupsRequest.current;
+    setGroupsLoading(true);
     try {
       const result = await api.findingGroups({
         page,
@@ -383,10 +389,14 @@ export default function FindingsPage() {
       });
       if (request !== groupsRequest.current || activeFilterFingerprint.current !== requestFilter) return;
       setGroups(result.items);
+      setGroupsError("");
+      setGroupsLoaded(true);
       setGroupTotal(result.total);
       setTotal(result.finding_total);
-    } catch {
-      // Polling keeps the last successful snapshot visible.
+    } catch (error) {
+      if (request === groupsRequest.current && activeFilterFingerprint.current === requestFilter) setGroupsError((error as Error).message || "请求失败");
+    } finally {
+      if (request === groupsRequest.current) setGroupsLoading(false);
     }
   }, [filterFingerprint, page, pageSize, severity, status, vulnclass, task, query, sort]);
 
@@ -430,7 +440,7 @@ export default function FindingsPage() {
             loading: false,
           },
         }));
-      } catch {
+      } catch (error) {
         if (groupRequests.current[key] !== request || activeFilterFingerprint.current !== requestFilter) return;
         setGroupFindings((current) => ({
           ...current,
@@ -443,6 +453,7 @@ export default function FindingsPage() {
               loaded: false,
             }),
             loading: false,
+            error: (error as Error).message || "请求失败",
           },
         }));
       }
@@ -790,11 +801,12 @@ export default function FindingsPage() {
   const flatListCard = (
     <Card className="gap-0 py-0">
       <CardContent className="px-0">
+        {flat.error && <div role="alert" className="flex flex-wrap items-center gap-2 p-3 text-sm text-destructive">发现加载失败：{flat.error}{flat.loaded ? "（保留上次数据）" : ""}<Button size="sm" variant="outline" disabled={flat.loading} onClick={() => void loadFlat()}>重试</Button></div>}
         {flat.loading && !flat.loaded ? (
           <div className="flex min-h-36 items-center justify-center">
             <Spinner />
           </div>
-        ) : (
+        ) : !flat.loaded ? null : (
           <>
             <FindingsTable items={flat.items} selectAllLabel="选择当前页全部" {...rowProps} />
             <TablePagination
@@ -821,13 +833,11 @@ export default function FindingsPage() {
           <h1 className="text-xl font-semibold tracking-tight">发现</h1>
           <p className="text-muted-foreground text-sm">跨任务漏洞汇总</p>
         </div>
-        <Tabs value={view} onValueChange={(v) => setView(v as FindingView)}>
-          <TabsList>
-            <TabsTrigger value="flat">全部发现</TabsTrigger>
-            <TabsTrigger value="grouped">按任务分组</TabsTrigger>
-            <TabsTrigger value="asset">按资产</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <fieldset aria-label="发现视图" className="flex flex-wrap gap-1 rounded-lg bg-muted p-1">
+          {([ ["flat", "全部发现"], ["grouped", "按任务分组"], ["asset", "按资产"] ] as const).map(([value, label]) => (
+            <Button key={value} size="sm" variant={view === value ? "secondary" : "ghost"} aria-pressed={view === value} onClick={() => setView(value)}>{label}</Button>
+          ))}
+        </fieldset>
       </div>
       <div className="flex flex-1 flex-col gap-4 md:gap-6">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
@@ -885,7 +895,7 @@ export default function FindingsPage() {
           </ToggleGroup>
 
           <Select value={status} onValueChange={(v) => setStatus(v as "all" | FindingStatus)}>
-            <SelectTrigger size="sm" className="w-32">
+            <SelectTrigger aria-label="按发现状态筛选" size="sm" className="w-32">
               <SelectValue placeholder="状态" />
             </SelectTrigger>
             <SelectContent>
@@ -899,7 +909,7 @@ export default function FindingsPage() {
           </Select>
 
           <Select value={vulnclass} onValueChange={setVulnclass}>
-            <SelectTrigger size="sm" className="w-40">
+            <SelectTrigger aria-label="按漏洞类型筛选" size="sm" className="w-40">
               <SelectValue placeholder="漏洞类型" />
             </SelectTrigger>
             <SelectContent>
@@ -913,7 +923,7 @@ export default function FindingsPage() {
           </Select>
 
           <Select value={task} onValueChange={setTask}>
-            <SelectTrigger size="sm" className="w-48">
+            <SelectTrigger aria-label="按任务筛选" size="sm" className="w-48">
               <SelectValue placeholder="任务" />
             </SelectTrigger>
             <SelectContent>
@@ -940,7 +950,7 @@ export default function FindingsPage() {
           </Select>
 
           <Select value={sort} onValueChange={(v) => setSort(v as "severity" | "time")}>
-            <SelectTrigger size="sm" className="w-36">
+            <SelectTrigger aria-label="发现排序方式" size="sm" className="w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -965,11 +975,12 @@ export default function FindingsPage() {
           <div className="grid min-h-0 items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[24rem_minmax(0,1fr)]">
             <Card className="gap-0 py-3 lg:sticky lg:top-4">
               <CardContent className="flex flex-col px-3">
+                {assetTree.error && <div role="alert" className="flex flex-wrap items-center gap-2 p-3 text-sm text-destructive">资产树加载失败：{assetTree.error}<Button size="sm" variant="outline" disabled={assetTree.loading} onClick={() => void loadAssetTree()}>重试</Button></div>}
                 {assetTree.loading && !assetTree.loaded ? (
                   <div className="flex min-h-36 items-center justify-center">
                     <Spinner />
                   </div>
-                ) : (
+                ) : !assetTree.loaded ? null : (
                   <AssetTree
                     nodes={assetTree.nodes}
                     selected={assetScope}
@@ -1017,6 +1028,8 @@ export default function FindingsPage() {
 
         {view === "grouped" && (
           <div className="flex flex-col gap-3">
+            {groupsError && <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border p-3 text-sm text-destructive">任务分组加载失败：{groupsError}{groupsLoaded ? "（保留上次数据）" : ""}<Button size="sm" variant="outline" disabled={groupsLoading} onClick={() => void refreshGroups()}>重试</Button></div>}
+            {!groupsLoaded && groupsLoading && <div role="status" className="p-8 text-center text-sm text-muted-foreground">正在加载任务分组…</div>}
             {groups.map((group) => {
               const key = findingGroupKey(group);
               const groupOpen = expandedGroups.has(key);
@@ -1087,11 +1100,12 @@ export default function FindingsPage() {
                   </CardHeader>
                   {groupOpen && (
                     <CardContent className="px-0">
+                      {state.error && <div role="alert" className="flex flex-wrap items-center gap-2 p-3 text-sm text-destructive">分组发现加载失败：{state.error}<Button size="sm" variant="outline" disabled={state.loading} onClick={() => void loadGroup(key, state.page, state.pageSize)}>重试</Button></div>}
                       {state.loading && !state.loaded ? (
                         <div className="flex min-h-36 items-center justify-center">
                           <Spinner />
                         </div>
-                      ) : (
+                      ) : !state.loaded ? null : (
                         <>
                           <FindingsTable items={state.items} selectAllLabel="选择本组当前页全部" {...rowProps} />
                           <TablePagination
@@ -1108,7 +1122,7 @@ export default function FindingsPage() {
                 </Card>
               );
             })}
-            {groups.length === 0 && (
+            {groupsLoaded && groups.length === 0 && !groupsError && (
               <Card>
                 <CardContent className="py-12 text-center text-sm text-muted-foreground">没有匹配的发现。</CardContent>
               </Card>

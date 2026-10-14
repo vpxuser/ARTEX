@@ -61,6 +61,7 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
 
   return (
     <SidebarProvider
+      className="h-svh overflow-hidden"
       defaultOpen={defaultOpen}
       style={
         {
@@ -76,7 +77,7 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
           "[html[data-content-layout=centered]_&>*]:max-w-screen-2xl",
           "peer-data-[variant=inset]:border",
           "[--dashboard-header-height:--spacing(12)]",
-          "min-w-0 overflow-x-hidden",
+          "min-h-0 min-w-0 overflow-hidden",
         )}
       >
         <MainContent>{children}</MainContent>
