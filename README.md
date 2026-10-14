@@ -276,8 +276,12 @@ server {
 ### 本地运行与测试
 
 ```bash
-./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
+NEXT_PUBLIC_MOCK=0 ./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
 ```
+
+启动前通过 `ARTEX_PG_DSN` 或 `config.json` 配置 PostgreSQL，并使用持久化数据库目录或数据卷。
+开发环境的 API 与 SSE 都走当前页面的同源 `/api` 转发；Next.js 禁用响应压缩，避免实时事件被缓冲。
+通过 WSL 或反向代理访问时，无需另外暴露 8787 端口。UI 验收请关闭 Mock，在真实页面验证操作与实时更新。
 
 - 后端：`go run ./cmd/artex`（不带 `-tags embedui` 则不内嵌前端）
 - 前端：`cd web && npm run dev`（`/api` 反代到后端，带热更新）

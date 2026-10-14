@@ -3006,9 +3006,13 @@ func (s *Server) streamActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
+	// Flush a comment even when the snapshot has no new activity. Forwarding
+	// proxies may wait for body bytes before opening EventSource in the browser.
+	fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
 
 	// Subscribe BEFORE replaying history so events in between aren't lost; dedup the
 	// overlap by skipping channel events whose id was already replayed.

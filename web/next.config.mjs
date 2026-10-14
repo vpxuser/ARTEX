@@ -10,6 +10,11 @@ const isMock = process.env.NEXT_PUBLIC_MOCK === "1";
 const nextConfig = {
   // 避免父目录的 lockfile 影响根目录推断及资源路径生成。
   turbopack: { root: fileURLToPath(new URL(".", import.meta.url)) },
+  devIndicators: false,
+  // Rewritten Go SSE responses must reach EventSource immediately. Next's gzip
+  // middleware buffers small activity frames; static deployments compress assets
+  // at their hosting layer instead.
+  compress: false,
   reactCompiler: true,
   // 允许从局域网 IP 访问 dev 资源（HMR），按需增删。
   // dev 阶段放开任意 IPv4 来源访问 /_next/* 与 HMR（局域网 IP 变动也不受影响）。
